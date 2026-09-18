@@ -17,7 +17,7 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) plugin for [Nuclear Option](http
 
 1. Install [BepInEx](https://github.com/BepInEx/BepInEx) for Nuclear Option if you haven't already.
 2. Download the latest release from the [Releases](../../releases) page.
-3. Drop the `KROP-1.0` folder into `Nuclear Option/BepInEx/plugins/`.
+3. Drop `KROP-1.0.dll` into `Nuclear Option/BepInEx/plugins/`.
 
 ## Configuring
 
