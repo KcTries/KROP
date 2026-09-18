@@ -11,7 +11,7 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) plugin for [Nuclear Option](http
 - **Advanced SPAAG Ammo** — AeroSentry's point-defense cannon sprays a narrow cone of kinetic fragments on a proximity detonation instead of a vanilla blast-radius explosion.
 - **Lifeboats** spawn when ships sink, with configurable lifetime and capacity.
 - **AI "Parked" state overhaul** — navigation lights off, crew hidden, and airbrakes no longer deploy on a stationary AI aircraft.
-- Various smaller fixes — see [CHANGELOG.md](CHANGELOG.md) for the full history.
+- Various smaller fixes and tuning passes on top of all of the above.
 
 ## Install
 
