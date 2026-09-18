@@ -25,9 +25,6 @@ If you have [BepInEx.ConfigurationManager](https://github.com/BepInEx/BepInEx.Co
 
 Otherwise, settings can be edited directly in `BepInEx/config/pavehog727.qolrealismfixes.cfg` after the plugin has run once.
 
-## Building from source
-
-The project references your local copy of `Assembly-CSharp.dll`, `UnityEngine*.dll`, `Mirage.dll`, `Rewired_Core.dll`, `BepInEx.dll`, and `0Harmony.dll` via hardcoded paths in `QOL_Realisim_Fixes.csproj` pointing at a default Steam install location. If your game is installed elsewhere, update the `HintPath` entries in the `.csproj` before building with:
 
 ```
 dotnet build -c Release
