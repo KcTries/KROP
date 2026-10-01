@@ -75,8 +75,7 @@ namespace QOL_Realisim_Fixes.Patches
         private static GlobalPosition _currentTargetPos;
         private static bool _currentTargetIsEligible;
 
-        // Temporary diagnostic logging for the "fragments only appear at
-        // impact instead of pre-detonating" report -- confirms which path
+        // Diagnostic logging (gated behind the "Logging" setting) that confirms which path
         // actually detonated each round (the widened early check here, or
         // vanilla's own tight one-tick-lookahead trigger via the transpiled
         // BlastFrag call below) and how far from the target it happened.

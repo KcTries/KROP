@@ -9,10 +9,13 @@ namespace QOL_Realisim_Fixes
         internal static void Initialize(ConfigFile config)
         {
             UseActualFlareValues = config.Bind(
-                "Countermeasures",
+                NonMultiplayerConfig.Section,
                 "Use Actual Flare Values",
-                true,
-                "Makes flare counts accurate to visual models. Does not reduce flares, only increases.");
+                false,
+                new ConfigDescription(
+                    "Makes flare counts accurate to visual models. Does not reduce flares, only increases.",
+                    null,
+                    new ConfigurationManagerAttributes { Order = 30, IsAdvanced = true }));
         }
     }
 }

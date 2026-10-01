@@ -11,16 +11,14 @@ namespace QOL_Realisim_Fixes
     // internal plumbing. Only the display name here, the .csproj
     // AssemblyName, and the deployed plugin folder name changed. Same
     // convention already used for the KaceyTronic-RWR rename.
-    [BepInPlugin("pavehog727.qolrealismfixes", "KROP 1.0", "1.0.0")]
+    [BepInPlugin("pavehog727.qolrealismfixes", "KROP", "1.1.0")]
     public class Plugin : BaseUnityPlugin
     {
         private void Awake()
         {
             VerboseLoggingConfig.Initialize(Config);
             FlareVelocityControl.Initialize(Config);
-            FlareCountConfig.Initialize(Config);
             EngineAudioConfig.Initialize(Config);
-            CramFragmentationConfig.Initialize(Config);
             FragmentSim.EnsureDriver(gameObject);
             BulletCrackConfig.Initialize(Config);
             DistanceLowpassConfig.Initialize(Config);
@@ -30,6 +28,14 @@ namespace QOL_Realisim_Fixes
             NightVisionAutoGain.EnsureSubscribed();
             LifeboatAssets.Initialize();
             LifeboatSpawnQueue.EnsureDriver(gameObject);
+            AirWakeConfig.Initialize(Config);
+            ContrailConfig.Initialize(Config);
+            FuelExplosionConfig.Initialize(Config);
+            // Bound last so the Non-Multiplayer Compatible section lands at
+            // the very bottom of the ConfigManager window (it orders
+            // sections by first-bind order).
+            FlareCountConfig.Initialize(Config);
+            CramFragmentationConfig.Initialize(Config);
 
             Harmony harmony = new Harmony("pavehog727.qolrealismfixes");
             harmony.PatchAll();
@@ -40,6 +46,7 @@ namespace QOL_Realisim_Fixes
             SonicBoomManagePatch.ApplyManualPatch(harmony);
             JetNozzleAfterburnerPatch.ApplyManualPatch(harmony);
             MissileMotorPatch.ApplyManualPatch(harmony);
+            MissileContrailPatch.ApplyManualPatch(harmony);
             NavLightsParkedOverridePatch.ApplyManualPatch(harmony);
 
             PeriodicCountermeasureControl.Initialize(Config, gameObject);

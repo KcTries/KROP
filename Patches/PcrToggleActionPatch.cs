@@ -1,41 +1,51 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using HarmonyLib;
 using Rewired;
-using Rewired.Data.Mapping;
-using UnityEngine;
+using Rewired.Data;
 
 namespace QOL_Realisim_Fixes.Patches
 {
-    // Adds "Toggle PCR" and "PCR Modifier" directly into the game's
-    // EXISTING "Flight" action category, rather than creating a whole new
-    // category/tab the way an earlier attempt did. This never touches
-    // ControlMapper.Initialize or its _mappingSets array at all -- that's
-    // specifically what collided with a bug in BOTE's own (all released
-    // versions) category registration, corrupting the Controls menu's
-    // layout (see PeriodicCountermeasureControl's own comment for the full
-    // story). Since "Flight" is already part of the vanilla "Game" tab's
-    // existing MappingSet, both actions just appear as extra rows there
-    // automatically once registered -- no menu-side wiring needed, and no
-    // risk of the same interaction.
+    // EXPERIMENTAL, internal-build only -- second attempt at native
+    // Controls-menu integration for PCR. The first attempt (see git history
+    // for this file) manually spliced a hand-rolled InputAction -- with a
+    // deliberately huge, self-assigned id in the 300000-350000 range, to
+    // dodge another mod's 10000-59999 bucket -- directly into
+    // userData.actions/actionCategoryMap via reflection-adjacent field
+    // access. That broke keybind reassignment game-wide, not just for our
+    // own two actions. Root cause was never fully confirmed (Rewired's own
+    // core is commercially obfuscated), but the vanilla game's own action
+    // ids only ever run 0-64 (confirmed by inspecting the actual shipped
+    // Rewired.prefab data via AssetRipper) -- everything downstream
+    // (serialization, the ControlMapper UI's conflict-checker, internal
+    // per-category caches) has only ever had to handle ids in that range,
+    // and a wildly out-of-range custom id is a very plausible way to
+    // violate an assumption none of that code was ever tested against.
     //
-    // "Toggle PCR" is a direct single-key toggle (defaults to keyboard B).
-    // "PCR Modifier" is meant to be held alongside the vanilla
-    // Countermeasures button on controller -- Rewired's own modifier-key
-    // system (ActionElementMap's modifierKey1/2/3) only works for keyboard
-    // mappings, so a real combo needs two separate actions checked together
-    // in code (see PeriodicCountermeasureControl) rather than one native
-    // binding. Ships unbound; there's no universal default hardware
-    // element the way KeyCode.B works for keyboard, so the player picks
-    // whatever button they want (D-pad Down, a bumper, etc.) themselves.
+    // This attempt instead goes entirely through UserData's own public,
+    // supported action-creation API (UserData.AddAction, which internally
+    // calls UserData.GetNewActionId() -- a plain incrementing counter
+    // seeded from the project's own baked data) instead of assigning an id
+    // ourselves, so our two actions land as ordinary-looking ids
+    // immediately following the vanilla range instead of somewhere Rewired
+    // has never seen a real id before.
     //
-    // Registration here happens too early to also assign "Toggle PCR"'s
-    // default keyboard binding -- ReInput/the player's actual ControllerMap
-    // instances don't exist yet at InputManager_Base.Awake, only the raw
-    // template data. EnsureDefaultKeyboardBinding (called later, once
-    // ReInput is ready -- see PeriodicCountermeasureControl.Tick) uses the
-    // real runtime API for that, ControllerMap.CreateElementMap.
+    // A proper id alone wasn't enough to explain an observed duplicate-
+    // controller symptom, so this was briefly switched Prefix -> Postfix on
+    // the theory that our action injection was racing Rewired's own
+    // controller detection inside the same Awake() call. That theory was
+    // WRONG: the duplicate controller was Steam Input creating a phantom
+    // second XInput device, unrelated to this mod entirely (confirmed by
+    // disabling Steam Input, which fixed it independently of any code
+    // change here). The Postfix version introduced a real regression
+    // instead -- it runs too late for ControlMapper to pick up the newly
+    // added actions, so they stopped appearing in the Controls menu at all.
+    // Back on Prefix, which is what actually registers correctly.
+    //
+    // Still not a fully CONFIRMED-safe approach -- Rewired's initialization
+    // sequence is still a black box we can't fully trace. If this
+    // reintroduces keybind-reassignment corruption (with Steam Input off),
+    // revert PeriodicCountermeasureControl to the ConfigManager
+    // KeyboardShortcut approach (see its own git history) and delete this
+    // file again.
     [HarmonyPatch(typeof(InputManager_Base), nameof(InputManager_Base.Awake))]
     internal static class PcrToggleActionPatch
     {
@@ -45,140 +55,70 @@ namespace QOL_Realisim_Fixes.Patches
 
         internal static int ToggleActionId { get; private set; } = -1;
         internal static int ModifierActionId { get; private set; } = -1;
-        internal static int FlightCategoryId { get; private set; } = -1;
 
         private static bool _registered;
-        private static bool _defaultBindingChecked;
 
         private static void Prefix(InputManager_Base __instance)
         {
-            if (_registered)
+            try
             {
-                return;
-            }
+                if (_registered)
+                {
+                    return;
+                }
 
-            List<InputAction> actions = __instance?.userData?.actions;
-            List<InputActionCategory> actionCategories = __instance?.userData?.actionCategories;
-            ActionCategoryMap actionCategoryMap = __instance?.userData?.actionCategoryMap;
-            if (actions == null || actionCategories == null || actionCategoryMap == null)
+                UserData userData = __instance?.userData;
+                if (userData == null)
+                {
+                    return;
+                }
+
+                int flightCategoryId = userData.GetActionCategoryId(FlightCategoryName);
+                if (flightCategoryId < 0)
+                {
+                    SoundPropagation.Log.LogWarning(
+                        $"[PcrDiag] Could not find existing '{FlightCategoryName}' action category -- PCR actions not registered.");
+                    return;
+                }
+
+                _registered = true;
+
+                ToggleActionId = RegisterAction(userData, flightCategoryId, ActionName);
+                ModifierActionId = RegisterAction(userData, flightCategoryId, ModifierActionName);
+            }
+            catch (System.Exception ex)
             {
-                return;
+                SoundPropagation.Log.LogError($"[PcrDiag] EXCEPTION in PcrToggleActionPatch.Prefix: {ex}");
             }
-
-            InputActionCategory flightCategory = actionCategories.FirstOrDefault(c => c.name == FlightCategoryName);
-            if (flightCategory == null)
-            {
-                SoundPropagation.Log.LogWarning(
-                    $"[PcrDiag] Could not find existing '{FlightCategoryName}' action category -- PCR actions not registered.");
-                return;
-            }
-
-            _registered = true;
-            FlightCategoryId = flightCategory.id;
-
-            ToggleActionId = RegisterAction(actions, actionCategoryMap, flightCategory.id, ActionName);
-            ModifierActionId = RegisterAction(actions, actionCategoryMap, flightCategory.id, ModifierActionName);
         }
 
-        private static int RegisterAction(
-            List<InputAction> actions, ActionCategoryMap actionCategoryMap, int categoryId, string actionName)
+        // Idempotent across repeated Awake() calls (mission restarts, etc.)
+        // by name, same as the first attempt -- UserData.GetAction(name)
+        // is the public lookup for that. A brand-new action is created via
+        // UserData.AddAction(categoryId) (proper id, Button type, already
+        // userAssignable -- see UserData's own default-action factory),
+        // then immediately renamed: GetActions_Copy() returns the SAME
+        // live InputAction references (not clones), and AddAction always
+        // appends to the end, so the last entry is guaranteed to be the one
+        // just created.
+        private static int RegisterAction(UserData userData, int categoryId, string actionName)
         {
-            InputAction existing = actions.FirstOrDefault(a => a.name == actionName);
+            InputAction existing = userData.GetAction(actionName);
             if (existing != null)
             {
                 return existing.id;
             }
 
-            InputAction action = new InputAction
-            {
-                id = GetId(actionName),
-                name = actionName,
-                type = InputActionType.Button,
-                descriptiveName = actionName,
-                categoryId = categoryId,
-                userAssignable = true,
-            };
-            actions.Add(action);
-            actionCategoryMap.AddAction(categoryId, action.id);
+            userData.AddAction(categoryId);
+            var actions = userData.GetActions_Copy();
+            InputAction created = actions[actions.Count - 1];
+            created.name = actionName;
+            created.descriptiveName = actionName;
 
             SoundPropagation.Log.LogInfo(
-                $"[PcrDiag] Registered '{actionName}' action (id={action.id}) into existing "
-                + $"'{FlightCategoryName}' category (id={categoryId}).");
-            return action.id;
-        }
-
-        // Called every Tick() until it succeeds once (or gives up because
-        // the player already has some binding for this action, whether
-        // from a prior session's save or their own manual rebind -- never
-        // overwrite a deliberate choice). Runs long after Awake(), once
-        // ReInput has finished building the player's real ControllerMap
-        // instances from the template data registered above. Only
-        // "Toggle PCR" gets a default -- "PCR Modifier" has no universal
-        // default hardware element to assign the same way.
-        internal static void EnsureDefaultKeyboardBinding(Player playerInput)
-        {
-            if (_defaultBindingChecked || ToggleActionId == -1 || playerInput == null || !ReInput.isReady)
-            {
-                return;
-            }
-
-            IEnumerable<ControllerMap> maps = playerInput.controllers.maps.GetAllMaps();
-            if (maps == null)
-            {
-                return;
-            }
-
-            ControllerMap keyboardFlightMap = null;
-            foreach (ControllerMap map in maps)
-            {
-                if (map.categoryId == FlightCategoryId && map.controllerType == ControllerType.Keyboard)
-                {
-                    keyboardFlightMap = map;
-                    break;
-                }
-            }
-
-            if (keyboardFlightMap == null)
-            {
-                return;
-            }
-
-            _defaultBindingChecked = true;
-
-            foreach (ActionElementMap existing in keyboardFlightMap.AllMaps)
-            {
-                if (existing.actionId == ToggleActionId)
-                {
-                    SoundPropagation.Log.LogInfo(
-                        $"[PcrDiag] '{ActionName}' already has a keyboard binding -- leaving it alone.");
-                    return;
-                }
-            }
-
-            bool created = keyboardFlightMap.CreateElementMap(
-                ToggleActionId, Pole.Positive, KeyCode.B, ModifierKey.None, ModifierKey.None, ModifierKey.None);
-            if (created)
-            {
-                ReInput.userDataStore?.Save();
-            }
-            SoundPropagation.Log.LogInfo($"[PcrDiag] Default keyboard binding (B) for '{ActionName}' created={created}.");
-        }
-
-        // Deterministic so a saved binding survives across sessions.
-        // Offset well clear of vanilla's own small sequential IDs and of
-        // BOTE's 10000-59999 bucket, to avoid any repeat of the earlier
-        // collision confusion.
-        private static int GetId(string actionName)
-        {
-            unchecked
-            {
-                int hash = 17;
-                foreach (char c in "QOL_Realisim_Fixes:" + actionName)
-                {
-                    hash = hash * 31 + c;
-                }
-                return Math.Abs(hash) % 50000 + 300000;
-            }
+                $"[PcrDiag] Registered '{actionName}' action (id={created.id}) into existing "
+                + $"'{FlightCategoryName}' category (id={categoryId}) via UserData.AddAction.");
+            return created.id;
         }
     }
 }

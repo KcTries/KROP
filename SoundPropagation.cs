@@ -15,14 +15,8 @@ namespace QOL_Realisim_Fixes
     // utility and can't run its own Update().
     internal static class SoundPropagation
     {
-        // Temporary diagnostic logging for the engine volume-vs-distance
-        // investigation -- dumps exactly what CopyAudioSourceSettings reads
-        // from the real source and writes onto the clone, once per newly
-        // created engine clone, straight to BepInEx's LogOutput.log. Removes
-        // any ambiguity from manually hunting down the right AudioSource in
-        // UnityExplorer (e.g. picking the wrong engine on a multi-engine
-        // aircraft) since this reads the exact same object reference the
-        // patches themselves are using.
+        // Shared log source for the whole plugin (also used by the per-system
+        // diagnostic logging, which is gated behind the "Logging" setting).
         internal static readonly ManualLogSource Log = BepInEx.Logging.Logger.CreateLogSource("QOL_Realisim_Fixes.SoundPropagation");
 
         private const float SpeedOfSoundMps = 340f;
@@ -255,7 +249,7 @@ namespace QOL_Realisim_Fixes
         // paths get chained together on a given frame). A small epsilon
         // absorbs that without meaningfully changing when resonance
         // actually kicks in for a genuinely-cutting filter.
-        private const float ResonanceEdgeEpsilonHz = 1f;
+        internal const float ResonanceEdgeEpsilonHz = 1f;
 
         private static float LowpassResonanceFor(float cutoffHz)
         {
@@ -265,6 +259,47 @@ namespace QOL_Realisim_Fixes
         private static float HighpassResonanceFor(float cutoffHz)
         {
             return cutoffHz > HighpassMinCutoffHz + ResonanceEdgeEpsilonHz ? DistanceLowpassConfig.ResonanceQ : 1f;
+        }
+
+        // Shared by every clone/loop/one-shot system in this file that owns
+        // a persistent AudioLowPassFilter/AudioHighPassFilter pair. Root-
+        // caused: merely HAVING one of these components attached to a
+        // GameObject -- even sitting at the "fully open" edge value that's
+        // supposed to be inaudible -- was itself found to produce an
+        // audible artifact (reported as a warble/scratch, most clearly on
+        // jet nozzle engines and explosion/sonic-boom one-shots). Creating
+        // the component lazily, only once the live cutoff would do
+        // something real, and leaving it uncreated otherwise, avoids the
+        // whole class of artifact instead of trying to tune around it.
+        // `ref filter` so a caller's own null field gets populated in place
+        // the first time it's actually needed, then just updated every
+        // later call once it exists.
+        internal static void EnsureLowpassFilter(GameObject obj, ref AudioLowPassFilter filter, float cutoffHz)
+        {
+            if (filter == null)
+            {
+                if (cutoffHz >= LowpassMaxCutoffHz - ResonanceEdgeEpsilonHz)
+                {
+                    return;
+                }
+                filter = obj.AddComponent<AudioLowPassFilter>();
+            }
+            filter.lowpassResonanceQ = LowpassResonanceFor(cutoffHz);
+            filter.cutoffFrequency = cutoffHz;
+        }
+
+        internal static void EnsureHighpassFilter(GameObject obj, ref AudioHighPassFilter filter, float cutoffHz)
+        {
+            if (filter == null)
+            {
+                if (cutoffHz <= HighpassMinCutoffHz + ResonanceEdgeEpsilonHz)
+                {
+                    return;
+                }
+                filter = obj.AddComponent<AudioHighPassFilter>();
+            }
+            filter.highpassResonanceQ = HighpassResonanceFor(cutoffHz);
+            filter.cutoffFrequency = cutoffHz;
         }
 
         // True while the camera is actually in the cockpit view state --
@@ -387,6 +422,27 @@ namespace QOL_Realisim_Fixes
             return _cachedAirframeMuffleMultiplier;
         }
 
+        // Same throttled-recheck reasoning as GetAirframeCockpitMuffleMultiplier
+        // above, kept as a separate cache since this scales a different thing
+        // (only the turbine engine sound, via TurbineEngineAnimatePatch's own
+        // muffleMultiplier argument) on a different, non-exclusive set of
+        // airframes (helicopters, vs. only the Ibis-with-door-gun above).
+        private static float _cachedTurbineMuffleMultiplier = 1f;
+        private static float _nextTurbineMuffleCheckTime;
+
+        internal static float GetHelicopterTurbineMuffleMultiplier()
+        {
+            if (Time.timeSinceLevelLoad < _nextTurbineMuffleCheckTime)
+            {
+                return _cachedTurbineMuffleMultiplier;
+            }
+            _nextTurbineMuffleCheckTime = Time.timeSinceLevelLoad + AirframeMuffleCheckIntervalSeconds;
+            _cachedTurbineMuffleMultiplier = GameManager.GetLocalAircraft(out Aircraft localAircraft)
+                ? AirframeCockpitOpenings.GetTurbineMuffleMultiplier(localAircraft)
+                : 1f;
+            return _cachedTurbineMuffleMultiplier;
+        }
+
         // Snapping straight from "fully muffled" to "fully open" the instant
         // the camera actually leaves cockpit view would be audible as a pop,
         // and that camera cut can lag a beat behind the real eject action
@@ -436,7 +492,11 @@ namespace QOL_Realisim_Fixes
             return Mathf.Clamp01(elapsed / EjectionMuffleReleaseSeconds);
         }
 
-        private const float HighpassMinCutoffHz = 10f; // Unity's own floor for AudioHighPassFilter, effectively unfiltered
+        // Internal rather than private -- ExplosionAudioCockpitFilterPatch
+        // needs this (and ResonanceEdgeEpsilonHz above) to decide whether
+        // creating its own highpass filter would be a genuine no-op, the
+        // same way ApplyCockpitOnlyLowpass decides for its own filters.
+        internal const float HighpassMinCutoffHz = 10f; // Unity's own floor for AudioHighPassFilter, effectively unfiltered
 
         // Cockpit highpass -- cuts low-end rumble while in cockpit view,
         // paired with the lowpass above to shape a boxy/telephone-like band
@@ -626,6 +686,32 @@ namespace QOL_Realisim_Fixes
                 filters = new CockpitOnlyFilters();
                 _cockpitOnlyFilters.Add(realSource, filters);
             }
+
+            // Computed up front so filter creation can be skipped entirely
+            // below when both would be a genuine no-op. Root-caused: merely
+            // HAVING an AudioLowPassFilter/AudioHighPassFilter attached --
+            // even at "neutral" 22000Hz/10Hz settings that should be
+            // inaudible -- produced a reported high-pitched warble that
+            // tracked camera movement, on sources that otherwise never
+            // needed any muffling at all (confirmed via a disable-KROP
+            // A/B test that this mod was the cause, then narrowed down by
+            // elimination: dopplerLevel/spatialBlend/bypassEffects were all
+            // confirmed untouched or already at these values in the
+            // vanilla prefab data). 22000Hz sits right at the edge of what's
+            // numerically well-behaved for a filter running against 44.1kHz
+            // audio (Nyquist = 22050Hz), which is the likely mechanism.
+            // Never creating the components at all until a source actually
+            // needs real muffling sidesteps the whole class of artifact
+            // rather than trying to tune around it.
+            float lowpassCutoff = ApplyMuffleMultiplier(LowpassMaxCutoffHz, ComputeCockpitLowpassCutoffOnly(), muffleMultiplier);
+            float highpassCutoff = ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), muffleMultiplier);
+            bool wouldBeNoOp = lowpassCutoff >= LowpassMaxCutoffHz - ResonanceEdgeEpsilonHz
+                && highpassCutoff <= HighpassMinCutoffHz + ResonanceEdgeEpsilonHz;
+            if (!filters.FiltersCreated && wouldBeNoOp)
+            {
+                return;
+            }
+
             if (!filters.FiltersCreated)
             {
                 // Unity applies AudioLowPassFilter/AudioHighPassFilter to
@@ -676,10 +762,8 @@ namespace QOL_Realisim_Fixes
             // ships with bypassEffects=true, the filters just below would be
             // silently ignored by Unity regardless of their cutoff.
             realSource.bypassEffects = false;
-            float lowpassCutoff = ApplyMuffleMultiplier(LowpassMaxCutoffHz, ComputeCockpitLowpassCutoffOnly(), muffleMultiplier);
             filters.Lowpass.lowpassResonanceQ = LowpassResonanceFor(lowpassCutoff);
             filters.Lowpass.cutoffFrequency = lowpassCutoff;
-            float highpassCutoff = ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), muffleMultiplier);
             filters.Highpass.highpassResonanceQ = HighpassResonanceFor(highpassCutoff);
             filters.Highpass.cutoffFrequency = highpassCutoff;
         }
@@ -818,7 +902,8 @@ namespace QOL_Realisim_Fixes
         public static void ScheduleDelayedOneShot(
             AudioSource template, AudioClip clip, Vector3 worldPosition,
             float extraDelaySeconds = 0f, float clipDurationSeconds = 0f, float highpassCutoffHz = 0f,
-            float? ownHitDistanceToCockpitMeters = null, float cockpitMuffleMultiplier = 1f)
+            float? ownHitDistanceToCockpitMeters = null, float cockpitMuffleMultiplier = 1f,
+            float? minDistanceOverride = null, float? maxDistanceOverride = null)
         {
             if (clip == null || IsBeyondTrackingRange(worldPosition))
             {
@@ -837,23 +922,36 @@ namespace QOL_Realisim_Fixes
 
             AudioSource source = tempObject.AddComponent<AudioSource>();
             CopyAudioSourceSettings(template, source);
+            // Lets a caller override the template's own 3D rolloff range --
+            // e.g. a distant sonic boom (see SonicBoomManagePatch) that would
+            // otherwise inherit vanilla's minDistance=1000/maxDistance=5000
+            // and, at the actual multi-thousand-meter range it plays from,
+            // get attenuated down to near-nothing by Unity's own rolloff
+            // curve before ever reaching the listener.
+            if (minDistanceOverride.HasValue)
+            {
+                source.minDistance = minDistanceOverride.Value;
+            }
+            if (maxDistanceOverride.HasValue)
+            {
+                source.maxDistance = maxDistanceOverride.Value;
+            }
             // Stationary emitter (fixed at the point it fired from, never
             // tracking anything afterward) -- no doppler shift to apply,
             // matching vanilla's own ExplosionAudio for its one-shot booms.
             source.dopplerLevel = 0f;
 
-            // Always created (not just when highpassCutoffHz > 0), so the
-            // live cockpit highpass can still apply even to one-shots that
-            // don't request their own static cut -- attached before the
-            // lowpass below so it always runs first in the chain (Unity
-            // processes filter components in attachment order).
-            AudioHighPassFilter highpassFilter = tempObject.AddComponent<AudioHighPassFilter>();
-            highpassFilter.cutoffFrequency = highpassCutoffHz; // corrected to the real (merged) value right before playback
-
-            AudioLowPassFilter lowpassFilter = tempObject.AddComponent<AudioLowPassFilter>();
-            lowpassFilter.lowpassResonanceQ = 1f; // neutral placeholder -- corrected (see LowpassResonanceFor) right before playback, same as the cutoff below
-            lowpassFilter.cutoffFrequency = LowpassMaxCutoffHz; // corrected to the real value right before playback
-
+            // Neither filter is created here anymore -- merely HAVING an
+            // AudioLowPassFilter/AudioHighPassFilter attached, even at a
+            // "fully open" neutral cutoff, was root-caused elsewhere in this
+            // mod (see ApplyCockpitOnlyLowpass) as itself producing an
+            // audible artifact, independent of any value written to it.
+            // These would have sat at exactly that neutral placeholder for
+            // this whole shot's pending delay (sometimes several seconds)
+            // before ever being corrected to a real value. Both are now
+            // created lazily, in the Tick() loop right when this shot
+            // actually starts playing, and only if the real (fully merged)
+            // cutoff would do something -- see there for the no-op check.
             _pending.Add(new PendingShot
             {
                 Source = source,
@@ -862,9 +960,7 @@ namespace QOL_Realisim_Fixes
                 SpawnTime = Time.timeSinceLevelLoad,
                 ExtraDelaySeconds = extraDelaySeconds,
                 ClipDurationSeconds = clipDurationSeconds,
-                LowpassFilter = lowpassFilter,
                 RequestedHighpassCutoffHz = highpassCutoffHz,
-                HighpassFilter = highpassFilter,
                 OwnHitDistanceToCockpitMeters = ownHitDistanceToCockpitMeters,
                 CockpitMuffleMultiplier = cockpitMuffleMultiplier
             });
@@ -978,13 +1074,11 @@ namespace QOL_Realisim_Fixes
             cloneSource.pitch = modifyPitch ? startPitch : targetPitch;
             float normalVolume = cloneSource.volume;
 
-            AudioLowPassFilter lowpassFilter = cloneObject.AddComponent<AudioLowPassFilter>();
-            lowpassFilter.lowpassResonanceQ = 1f; // neutral placeholder -- corrected (see LowpassResonanceFor) live every tick in TickLoops
-            lowpassFilter.cutoffFrequency = LowpassMaxCutoffHz; // corrected live every tick in TickLoops
-
-            AudioHighPassFilter highpassFilter = cloneObject.AddComponent<AudioHighPassFilter>();
-            highpassFilter.highpassResonanceQ = 1f; // neutral placeholder -- corrected (see HighpassResonanceFor) live every tick in TickLoops
-            highpassFilter.cutoffFrequency = HighpassMinCutoffHz; // corrected live every tick in TickLoops
+            // Neither filter is created here -- see TickLoops, which creates
+            // them lazily only once the live cutoff would do something real
+            // (same root-caused reasoning as ApplyCockpitOnlyLowpass: merely
+            // having one of these attached, even fully "open," was found to
+            // itself produce an audible artifact).
 
             // Seeded from the gun's own fireInterval until a second real
             // shot gives an actual observed interval to replace it with --
@@ -1005,8 +1099,6 @@ namespace QOL_Realisim_Fixes
                 PitchClimbRate = pitchClimbRate,
                 LastShotTime = Time.timeSinceLevelLoad,
                 ObservedInterval = fireIntervalSeed > 0f ? fireIntervalSeed : 0.05f,
-                LowpassFilter = lowpassFilter,
-                HighpassFilter = highpassFilter,
                 NormalVolume = normalVolume
             };
             return true;
@@ -1067,11 +1159,9 @@ namespace QOL_Realisim_Fixes
                     Vector3 gunPosition = gun.transform.position;
                     state.CloneObject.transform.position = gunPosition;
                     float gunLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(gunPosition));
-                    state.LowpassFilter.lowpassResonanceQ = LowpassResonanceFor(gunLowpassCutoff);
-                    state.LowpassFilter.cutoffFrequency = gunLowpassCutoff;
+                    EnsureLowpassFilter(state.CloneObject, ref state.LowpassFilter, gunLowpassCutoff);
                     float gunHighpassCutoff = ComputeCockpitHighpassCutoffHz();
-                    state.HighpassFilter.highpassResonanceQ = HighpassResonanceFor(gunHighpassCutoff);
-                    state.HighpassFilter.cutoffFrequency = gunHighpassCutoff;
+                    EnsureHighpassFilter(state.CloneObject, ref state.HighpassFilter, gunHighpassCutoff);
 
                     if (IsBeyondTrackingRange(gunPosition))
                     {
@@ -1409,18 +1499,12 @@ namespace QOL_Realisim_Fixes
                 cloneSource.time = UnityEngine.Random.Range(0f, template.clip != null ? template.clip.length : 0f);
                 cloneSource.Play();
 
-                AudioLowPassFilter lowpassFilter = cloneObject.AddComponent<AudioLowPassFilter>();
-                lowpassFilter.lowpassResonanceQ = 1f; // neutral placeholder -- corrected (see LowpassResonanceFor) live every tick in TickEngines
-                lowpassFilter.cutoffFrequency = LowpassMaxCutoffHz; // corrected live every tick in TickEngines
-
-                AudioHighPassFilter highpassFilter = cloneObject.AddComponent<AudioHighPassFilter>();
-                highpassFilter.highpassResonanceQ = 1f; // neutral placeholder -- corrected (see HighpassResonanceFor) live every tick in TickEngines
-                highpassFilter.cutoffFrequency = HighpassMinCutoffHz; // corrected live every tick in TickEngines
-
+                // Neither filter is created here -- see TickEngines, which
+                // creates them lazily only once the live cutoff would do
+                // something real (same reasoning as ApplyCockpitOnlyLowpass).
                 state = new EngineState
                 {
                     CloneSource = cloneSource, CloneObject = cloneObject,
-                    LowpassFilter = lowpassFilter, HighpassFilter = highpassFilter,
                     Owner = owner
                 };
                 _engines[engine] = state;
@@ -1455,7 +1539,7 @@ namespace QOL_Realisim_Fixes
                 // not one that needs catching within the same frame.
                 bool clipChanging = state.CloneSource.clip != template.clip;
                 bool dueForPeriodicSync = Time.timeSinceLevelLoad >= state.NextSettingsSyncTime;
-                if (clipChanging)
+                if (clipChanging && VerboseLoggingConfig.Enabled.Value)
                 {
                     Log.LogInfo(
                         $"[EngineAudioDiag] Re-syncing clone for '{engine.GetType().Name}' -- clip changed "
@@ -1715,11 +1799,9 @@ namespace QOL_Realisim_Fixes
                     state.CloneSource.dopplerLevel = GateDopplerLevel(sample.DopplerLevel, state.SmoothVelocity);
                     state.CloneObject.transform.position = state.SmoothedPosition;
                     float engineLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(clonePosition));
-                    state.LowpassFilter.lowpassResonanceQ = LowpassResonanceFor(engineLowpassCutoff);
-                    state.LowpassFilter.cutoffFrequency = engineLowpassCutoff;
+                    EnsureLowpassFilter(state.CloneObject, ref state.LowpassFilter, engineLowpassCutoff);
                     float engineHighpassCutoff = ComputeCockpitHighpassCutoffHz();
-                    state.HighpassFilter.highpassResonanceQ = HighpassResonanceFor(engineHighpassCutoff);
-                    state.HighpassFilter.cutoffFrequency = engineHighpassCutoff;
+                    EnsureHighpassFilter(state.CloneObject, ref state.HighpassFilter, engineHighpassCutoff);
 
                     if (VerboseLoggingConfig.Enabled.Value && Time.timeSinceLevelLoad >= state.NextDiagLogTime)
                     {
@@ -1845,14 +1927,9 @@ namespace QOL_Realisim_Fixes
             cloneSource.clip = template.clip;
             cloneSource.loop = template.loop;
 
-            AudioLowPassFilter lowpassFilter = cloneObject.AddComponent<AudioLowPassFilter>();
-            lowpassFilter.lowpassResonanceQ = 1f; // neutral placeholder -- corrected (see LowpassResonanceFor) live every tick in TickTrackedLoops
-            lowpassFilter.cutoffFrequency = LowpassMaxCutoffHz; // corrected live every tick in TickTrackedLoops
-
-            AudioHighPassFilter highpassFilter = cloneObject.AddComponent<AudioHighPassFilter>();
-            highpassFilter.highpassResonanceQ = 1f; // neutral placeholder -- corrected (see HighpassResonanceFor) live every tick in TickTrackedLoops
-            highpassFilter.cutoffFrequency = HighpassMinCutoffHz; // corrected live every tick in TickTrackedLoops
-
+            // Neither filter is created here -- see TickTrackedLoops, which
+            // creates them lazily only once the live cutoff would do
+            // something real (same reasoning as ApplyCockpitOnlyLowpass).
             _trackedLoops[template] = new TrackedLoopState
             {
                 CloneSource = cloneSource,
@@ -1861,9 +1938,7 @@ namespace QOL_Realisim_Fixes
                 DelaySeconds = ComputeDelaySeconds(position),
                 TargetPosition = position,
                 SmoothedPosition = position,
-                HasSmoothedPosition = true,
-                LowpassFilter = lowpassFilter,
-                HighpassFilter = highpassFilter
+                HasSmoothedPosition = true
             };
         }
 
@@ -1953,11 +2028,9 @@ namespace QOL_Realisim_Fixes
                     }
                     state.CloneObject.transform.position = state.SmoothedPosition;
                     float trackedLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(state.SmoothedPosition));
-                    state.LowpassFilter.lowpassResonanceQ = LowpassResonanceFor(trackedLowpassCutoff);
-                    state.LowpassFilter.cutoffFrequency = trackedLowpassCutoff;
+                    EnsureLowpassFilter(state.CloneObject, ref state.LowpassFilter, trackedLowpassCutoff);
                     float trackedHighpassCutoff = ComputeCockpitHighpassCutoffHz();
-                    state.HighpassFilter.highpassResonanceQ = HighpassResonanceFor(trackedHighpassCutoff);
-                    state.HighpassFilter.cutoffFrequency = trackedHighpassCutoff;
+                    EnsureHighpassFilter(state.CloneObject, ref state.HighpassFilter, trackedHighpassCutoff);
 
                     if (state.HasTargetAudio && state.Started)
                     {
@@ -2368,23 +2441,25 @@ namespace QOL_Realisim_Fixes
                 float requiredDelay = ComputeDelaySeconds(shot.TempObject.transform.position) + shot.ExtraDelaySeconds;
                 if (elapsed >= requiredDelay)
                 {
-                    if (shot.LowpassFilter != null)
-                    {
-                        float oneShotLowpassCutoff = shot.OwnHitDistanceToCockpitMeters.HasValue
-                            ? ComputeOwnHitImpactLowpassCutoffHz(shot.OwnHitDistanceToCockpitMeters.Value)
-                            : ComputeLowpassCutoffHz(GetDistanceToListener(shot.TempObject.transform.position), shot.CockpitMuffleMultiplier);
-                        shot.LowpassFilter.lowpassResonanceQ = LowpassResonanceFor(oneShotLowpassCutoff);
-                        shot.LowpassFilter.cutoffFrequency = oneShotLowpassCutoff;
-                    }
-                    if (shot.HighpassFilter != null)
-                    {
-                        float cockpitHighpassCutoff = shot.OwnHitDistanceToCockpitMeters.HasValue
-                            ? ComputeOwnHitImpactHighpassCutoffHz(shot.OwnHitDistanceToCockpitMeters.Value)
-                            : ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), shot.CockpitMuffleMultiplier);
-                        float oneShotHighpassCutoff = Mathf.Max(shot.RequestedHighpassCutoffHz, cockpitHighpassCutoff);
-                        shot.HighpassFilter.highpassResonanceQ = HighpassResonanceFor(oneShotHighpassCutoff);
-                        shot.HighpassFilter.cutoffFrequency = oneShotHighpassCutoff;
-                    }
+                    // Lazily created here, right as the shot actually starts
+                    // playing, and only if the fully-merged cutoff would do
+                    // something real -- see ScheduleDelayedOneShot for why.
+                    // Highpass is created first (if needed) before lowpass,
+                    // preserving the original attachment order (Unity
+                    // processes filter components on a GameObject in the
+                    // order they were attached, and the static per-call
+                    // highpass request -- e.g. bullet crack's tone-shaping
+                    // cut -- needs to run before the distance lowpass).
+                    float cockpitHighpassCutoff = shot.OwnHitDistanceToCockpitMeters.HasValue
+                        ? ComputeOwnHitImpactHighpassCutoffHz(shot.OwnHitDistanceToCockpitMeters.Value)
+                        : ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), shot.CockpitMuffleMultiplier);
+                    float oneShotHighpassCutoff = Mathf.Max(shot.RequestedHighpassCutoffHz, cockpitHighpassCutoff);
+                    EnsureHighpassFilter(shot.TempObject, ref shot.HighpassFilter, oneShotHighpassCutoff);
+
+                    float oneShotLowpassCutoff = shot.OwnHitDistanceToCockpitMeters.HasValue
+                        ? ComputeOwnHitImpactLowpassCutoffHz(shot.OwnHitDistanceToCockpitMeters.Value)
+                        : ComputeLowpassCutoffHz(GetDistanceToListener(shot.TempObject.transform.position), shot.CockpitMuffleMultiplier);
+                    EnsureLowpassFilter(shot.TempObject, ref shot.LowpassFilter, oneShotLowpassCutoff);
                     shot.Source.PlayOneShot(shot.Clip);
 
                     if (shot.ClipDurationSeconds > 0f)

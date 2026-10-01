@@ -14,5 +14,11 @@ namespace QOL_Realisim_Fixes
         /// 0 by default, higher number is higher on the list.
         /// </summary>
         public int? Order;
+
+        /// <summary>
+        /// Hides the setting unless the player turns on ConfigManager's
+        /// "Show advanced settings" toggle.
+        /// </summary>
+        public bool? IsAdvanced;
     }
 }

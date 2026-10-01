@@ -13,7 +13,7 @@ namespace QOL_Realisim_Fixes.Patches
     // themselves). ref on the injected field lets Harmony write the raised
     // value back for every later EjectFlare()/EjectChaff() call to use.
     [HarmonyPatch(typeof(FlareEjector), "Awake")]
-    internal static class FlareEjectorAwakeDiagPatch
+    internal static class FlareEjectorVelocityPatch
     {
         private static void Postfix(
             FlareEjector __instance,
@@ -33,7 +33,7 @@ namespace QOL_Realisim_Fixes.Patches
     }
 
     [HarmonyPatch(typeof(ChaffEjector), "Awake")]
-    internal static class ChaffEjectorAwakeDiagPatch
+    internal static class ChaffEjectorVelocityPatch
     {
         private static void Postfix(
             ChaffEjector __instance,

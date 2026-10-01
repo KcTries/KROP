@@ -76,9 +76,21 @@ namespace QOL_Realisim_Fixes.Patches
             ___directionalVolumeMult = Mathf.Lerp(0.5f, 2f, ___camFacing);
 
             float volume = ___thrustRatio * ___thrustMaxVolume * ___directionalVolumeMult;
-            float dopplerLevel = ___thrustAudio.dopplerLevel > 0f
-                ? Mathf.Max(1f - ___camFacing * 2f, 0.01f)
-                : ___thrustAudio.dopplerLevel;
+
+            // dopplerLevel used to be re-derived from camFacing here (the
+            // same unsmoothed, per-frame camera-angle value directionalVolumeMult
+            // above uses) -- reported as a high-pitched warble specifically
+            // on jet nozzles. camFacing changes continuously with camera
+            // angle/orientation with no damping at all, so that formula
+            // fed a noisy, jumpy pitch multiplier straight into the clone
+            // every frame. The REAL Doppler effect is already computed
+            // correctly downstream from the clone's own (properly smoothed)
+            // resampled velocity in SoundPropagation's TickEngines/
+            // GateDopplerLevel -- every other engine type just forwards the
+            // source's real dopplerLevel and lets that system handle it;
+            // nozzles now do the same instead of overriding it with an
+            // angle-based value that was never a real Doppler signal.
+            float dopplerLevel = ___thrustAudio.dopplerLevel;
 
             // Keyed by thrustAudio itself, not __instance -- a single
             // JetNozzle also owns one or more independent Afterburner

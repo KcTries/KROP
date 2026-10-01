@@ -39,19 +39,31 @@ namespace QOL_Realisim_Fixes.Patches
             // Merge cockpit muffling on top of vanilla's own just-computed
             // distance cutoff -- whichever wants MORE cut wins, same
             // relationship used everywhere else this mod merges cockpit
-            // cutoff with an existing one.
+            // cutoff with an existing one. ___filter is vanilla's own
+            // AudioLowPassFilter, always present on this source regardless
+            // of anything this mod does, so there's no creation to defer
+            // here -- just merging into an already-existing, already-live
+            // filter component.
             ___filter.cutoffFrequency = Mathf.Min(___filter.cutoffFrequency, SoundPropagation.ComputeCockpitLowpassCutoffOnly());
 
-            // Vanilla never added a highpass here at all -- add one
-            // (lazily, cached via the component itself) so explosions get
-            // the same boxy/telephone-like cockpit treatment as everything
-            // else this mod manages instead of just a lowpass.
+            // Vanilla never added a highpass here at all -- unlike the
+            // lowpass above, this one is entirely this mod's own addition,
+            // so it's subject to the same root-caused bug as
+            // ApplyCockpitOnlyLowpass: merely HAVING an AudioHighPassFilter
+            // attached (even at the "fully open" 10Hz floor) was found to
+            // itself produce an audible artifact, independent of any value
+            // written to it. EnsureHighpassFilter only creates it once
+            // cockpit highpass muffling would do something real -- an
+            // explosion heard outside cockpit view (the overwhelming
+            // majority of them, since a firing player's explosions are
+            // mostly seen third-person or from a distance) now never gets
+            // this component attached at all. GetComponent every call
+            // (rather than caching) since this Postfix has no per-instance
+            // state to cache it in -- ManagedExplosion instances are
+            // pooled/reused, and cheap enough to re-query regardless.
             AudioHighPassFilter highpassFilter = ___audioSource.GetComponent<AudioHighPassFilter>();
-            if (highpassFilter == null)
-            {
-                highpassFilter = ___audioSource.gameObject.AddComponent<AudioHighPassFilter>();
-            }
-            highpassFilter.cutoffFrequency = SoundPropagation.ComputeCockpitHighpassCutoffHz();
+            SoundPropagation.EnsureHighpassFilter(
+                ___audioSource.gameObject, ref highpassFilter, SoundPropagation.ComputeCockpitHighpassCutoffHz());
         }
     }
 }

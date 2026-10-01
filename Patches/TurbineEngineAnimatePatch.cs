@@ -21,6 +21,13 @@ namespace QOL_Realisim_Fixes.Patches
     // DuctedFan, and ConstantSpeedProp are separate, independent classes
     // with their own audio code, not subclasses of this one, and aren't
     // covered by this patch.
+    //
+    // On helicopters (Ibis/Chicane/Knockout), this turbine hum reaches the
+    // cabin much more directly than a fixed-wing jet's sealed canopy allows
+    // -- GetHelicopterTurbineMuffleMultiplier() halves the cockpit filter's
+    // effect specifically for this sound when the local player is seated in
+    // one of those three, while their rotor/fan/mechanical sounds keep the
+    // normal filter (see AirframeCockpitOpenings.GetTurbineMuffleMultiplier).
     [HarmonyPatch(typeof(TurbineEngine), "Animate")]
     internal static class TurbineEngineAnimatePatch
     {
@@ -57,7 +64,8 @@ namespace QOL_Realisim_Fixes.Patches
             {
                 AudioSource[] siblings = _siblingCache.GetValue(
                     ___turbineAudio, source => source.gameObject.GetComponents<AudioSource>());
-                SoundPropagation.ApplyCockpitOnlyLowpass(___turbineAudio, siblings);
+                SoundPropagation.ApplyCockpitOnlyLowpass(
+                    ___turbineAudio, siblings, SoundPropagation.GetHelicopterTurbineMuffleMultiplier());
                 return true;
             }
 

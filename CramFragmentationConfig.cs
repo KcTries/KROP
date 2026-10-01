@@ -31,13 +31,20 @@ namespace QOL_Realisim_Fixes
 
         internal static void Initialize(ConfigFile config)
         {
-            const string section = "Advanced SPAAG Ammo";
+            // Every entry is advanced (hidden unless "Show advanced
+            // settings" is on) and lives in the shared Non-Multiplayer
+            // Compatible section. Explicit Orders keep the entries grouped
+            // in this order instead of ConfigManager's alphabetical sort.
+            const string section = NonMultiplayerConfig.Section;
 
             Enabled = config.Bind(
                 section,
-                "Enabled",
-                true,
-                "Enables the Advanced SPAAG Ammo system. Disable to increase performance on heavy maps");
+                "Advanced SPAAG Ammo",
+                false,
+                new ConfigDescription(
+                    "Enables the Advanced SPAAG Ammo system. Disable to increase performance on heavy maps",
+                    null,
+                    new ConfigurationManagerAttributes { Order = 100, IsAdvanced = true }));
 
             FragmentCount = config.Bind(
                 section,
@@ -45,7 +52,8 @@ namespace QOL_Realisim_Fixes
                 5,
                 new ConfigDescription(
                     "Number of fragments simulated per 30mm airburst (can get performance heavy with higher numbers)",
-                    new AcceptableValueRange<int>(3, 10)));
+                    new AcceptableValueRange<int>(3, 10),
+                    new ConfigurationManagerAttributes { Order = 90, IsAdvanced = true }));
 
             ConeAngleDegrees = config.Bind(
                 section,
@@ -53,7 +61,8 @@ namespace QOL_Realisim_Fixes
                 1.5f,
                 new ConfigDescription(
                     "Maximum angle the fragments can be spawned at.",
-                    new AcceptableValueRange<float>(0f, 45f)));
+                    new AcceptableValueRange<float>(0f, 45f),
+                    new ConfigurationManagerAttributes { Order = 80, IsAdvanced = true }));
 
             LifetimeSeconds = config.Bind(
                 section,
@@ -61,7 +70,8 @@ namespace QOL_Realisim_Fixes
                 2f,
                 new ConfigDescription(
                     "Time in seconds the frags continue to be simulated (If having performance issues try reducing this)",
-                    new AcceptableValueRange<float>(0.5f, 5f)));
+                    new AcceptableValueRange<float>(0.5f, 5f),
+                    new ConfigurationManagerAttributes { Order = 70, IsAdvanced = true }));
 
             DamageFraction = config.Bind(
                 section,
@@ -70,7 +80,8 @@ namespace QOL_Realisim_Fixes
                 new ConfigDescription(
                     "Division of damage between each fragment from the original 30mm round. If Aerosentries are "
                     + "underperforming, turn this up",
-                    new AcceptableValueRange<float>(0.01f, 1f)));
+                    new AcceptableValueRange<float>(0.01f, 1f),
+                    new ConfigurationManagerAttributes { Order = 60, IsAdvanced = true }));
 
             DetonateLeadSeconds = config.Bind(
                 section,
@@ -80,13 +91,17 @@ namespace QOL_Realisim_Fixes
                     "Time before estimated impact with target to detonate and release fragments. More time is a "
                     + "bigger cloud but less reliable damage on smaller targets, shorter time is more reliable "
                     + "damage but on a smaller area.",
-                    new AcceptableValueRange<float>(0f, 2f)));
+                    new AcceptableValueRange<float>(0f, 2f),
+                    new ConfigurationManagerAttributes { Order = 50, IsAdvanced = true }));
 
             ShowDebugTracers = config.Bind(
                 section,
                 "Show Fragment Tracers",
                 true,
-                "Show fragment tracers. Unrealistic, but cool.");
+                new ConfigDescription(
+                    "Show fragment tracers. Unrealistic, but cool.",
+                    null,
+                    new ConfigurationManagerAttributes { Order = 40, IsAdvanced = true }));
         }
     }
 }

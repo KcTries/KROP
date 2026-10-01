@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>KROP-1.0</AssemblyName>
+    <AssemblyName>KROP-1.1</AssemblyName>
     <Nullable>disable</Nullable>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <RestoreAdditionalProjectSources>
@@ -18,6 +18,42 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Sounds\bulletcrack.wav">
       <LogicalName>QOL_Realisim_Fixes.bulletcrack</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoom1.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoom1.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoom2.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoom2.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoom3.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoom3.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoomFar1.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoomFar1.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoomFar2.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoomFar2.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\SonicBoomFar3.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.SonicBoomFar3.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\MissileBoom1.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.MissileBoom1.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\MissileBoom2.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.MissileBoom2.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Sounds\SonicBooms\MissileBoom3.wav">
+      <LogicalName>QOL_Realisim_Fixes.SonicBooms.MissileBoom3.wav</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Textures\SmokeBillowy.png">
+      <LogicalName>QOL_Realisim_Fixes.Textures.SmokeBillowy.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Textures\SmokeBillowyNormal.png">
+      <LogicalName>QOL_Realisim_Fixes.Textures.SmokeBillowyNormal.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Textures\SmokeRibbon.png">
+      <LogicalName>QOL_Realisim_Fixes.Textures.SmokeRibbon.png</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 
@@ -55,6 +91,10 @@
     </Reference>
     <Reference Include="UnityEngine.ParticleSystemModule">
       <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Nuclear Option\NuclearOption_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\Nuclear Option\NuclearOption_Data\Managed\UnityEngine.ImageConversionModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.PhysicsModule">

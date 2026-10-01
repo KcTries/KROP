@@ -15,11 +15,11 @@ namespace QOL_Realisim_Fixes
 
         internal static void Initialize(ConfigFile config)
         {
-            const string section = "Bullet Cracks";
-
+            // Used to be its own "Bullet Cracks" section with a single
+            // "Enable" entry -- folded into General as one toggle.
             Enabled = config.Bind(
-                section,
-                "Enable",
+                "General",
+                "Bullet Cracks",
                 false,
                 "Plays a crack sound when bullets pass near the camera and are going supersonic. PERFORMANCE HEAVY!!!");
         }

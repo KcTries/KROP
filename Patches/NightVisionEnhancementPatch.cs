@@ -33,6 +33,18 @@ namespace QOL_Realisim_Fixes.Patches
         private static float _grainDensity = -1f;
         private static readonly System.Random RandomSource = new System.Random();
 
+        // The grain tile itself is square and tiles across the whole
+        // screen via wrapMode.Repeat -- sitting in the exact same
+        // orientation for a whole flight makes an otherwise-random pattern
+        // start to read as a fixed, recognizable image rather than actual
+        // noise. A 90/180/270-degree rotation of a square pixel grid is a
+        // lossless index permutation (no interpolation, no degradation
+        // even applied repeatedly), so periodically nudging it to a new
+        // random orientation is a cheap way to keep it feeling alive
+        // without paying for a full re-randomize.
+        private const float RotationIntervalSeconds = 3f;
+        private static float _nextRotationTime;
+
         // Boosts the ALREADY-tinted result from ChannelMixer below, not the
         // original scene -- safe to apply here (unlike the rejected
         // Saturation+ColorFilter approach) since by this point in the
@@ -141,12 +153,19 @@ namespace QOL_Realisim_Fixes.Patches
             blueIn.value = 11f * tintChannel;
         }
 
-        private const int StaticTextureSize = 128;
+        // 128 was visibly tiling -- URP repeats this texture across the
+        // whole screen (wrapMode.Repeat), so at a 2560x1440 reference
+        // resolution a 128px tile repeats ~20x horizontally, easily
+        // perceptible as a grid in a calm scene (a flat night sky) even
+        // though the content within each tile is genuinely random.
+        // Bumped substantially to cut the repeat count down to something
+        // the eye doesn't pick out; only costs anything when the texture
+        // is actually rebuilt (density change or the periodic rotation
+        // below), never per frame, so a bigger buffer is effectively free.
+        private const int StaticTextureSize = 512;
 
         // Procedurally builds the fine static grain texture and assigns it
-        // as the CURRENT FilmGrain's custom grain map every call. Only
-        // re-rolled when Static Density itself changes -- a stable
-        // pattern, not something that needs to move to look right. The
+        // as the CURRENT FilmGrain's custom grain map every call. The
         // type/response/texture assignments are re-applied unconditionally
         // in case this is a freshly re-added FilmGrain component on a new
         // profile (post scene-change) that hasn't seen them yet, even
@@ -173,6 +192,14 @@ namespace QOL_Realisim_Fixes.Patches
                 RegenerateGrain(_grainPixels, density);
                 _staticTexture.SetPixels32(_grainPixels);
                 _staticTexture.Apply(false, false);
+                _nextRotationTime = Time.unscaledTime + RotationIntervalSeconds;
+            }
+            else if (Time.unscaledTime >= _nextRotationTime)
+            {
+                RotateGrainRandomly(_grainPixels, StaticTextureSize);
+                _staticTexture.SetPixels32(_grainPixels);
+                _staticTexture.Apply(false, false);
+                _nextRotationTime = Time.unscaledTime + RotationIntervalSeconds;
             }
 
             filmGrain.type.overrideState = true;
@@ -214,6 +241,36 @@ namespace QOL_Realisim_Fixes.Patches
                 // Writing the same value into every channel means it works
                 // whichever channel actually gets sampled.
                 pixels[i] = new Color32(value, value, value, value);
+            }
+        }
+
+        // Picks one of 0/90/180/270 degrees at random and rotates the
+        // CURRENT tile that far -- not a fresh re-roll, so it stays cheap
+        // (no per-pixel RNG) and never converges toward a "smoother"
+        // average the way re-randomizing every frame would risk looking.
+        private static void RotateGrainRandomly(Color32[] pixels, int size)
+        {
+            int quarterTurns = RandomSource.Next(0, 4);
+            for (int i = 0; i < quarterTurns; i++)
+            {
+                RotateGrain90(pixels, size);
+            }
+        }
+
+        private static void RotateGrain90(Color32[] pixels, int size)
+        {
+            Color32[] rotated = new Color32[pixels.Length];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    // Clockwise 90: (x, y) -> (size-1-y, x).
+                    rotated[x * size + (size - 1 - y)] = pixels[y * size + x];
+                }
+            }
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = rotated[i];
             }
         }
     }

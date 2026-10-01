@@ -27,30 +27,47 @@ namespace QOL_Realisim_Fixes
     //
     // Toggle used to be a double-tap on the vanilla Countermeasures button,
     // but that made it trivial to trigger by accident while rapidly
-    // mashing Countermeasures to dump flares in a hurry. A first attempt at
-    // a native Controls-menu integration created a whole new "KQOLRF"
-    // category/tab, which surfaced a real bug in BOTE's own (all currently
-    // released versions of it) input registration code -- it re-registers
-    // its category without a re-entry guard, corrupting the Controls
-    // menu's layout once a second mod's category also existed. The current
-    // approach avoids that entirely by adding a single "Toggle PCR" action
-    // into the EXISTING "Flight" category instead of creating a new one
-    // (see PcrToggleActionPatch) -- never touches ControlMapper or its
-    // _mappingSets array, so there's no way to collide with BOTE's bug.
-    // Defaults to keyboard B (assigned once ReInput is ready, via
-    // PcrToggleActionPatch.EnsureDefaultKeyboardBinding, using Rewired's
-    // real ControllerMap.CreateElementMap runtime API), and is fully
-    // rebindable in the native Controls menu under Flight from there.
-    //  - Controller: a second "PCR Modifier" action (also registered into
-    //    Flight, ships unbound -- no universal default hardware element
-    //    the way KeyCode.B works for keyboard) held alongside the vanilla
-    //    Countermeasures button. Rewired's own modifier-key system only
-    //    supports keyboard mappings, so a real combo needs two separate
-    //    actions checked together here rather than one native binding.
-    //    While the modifier is held, the vanilla manual-fire path is also
+    // mashing Countermeasures to dump flares in a hurry. Native
+    // Controls-menu integration has been through three attempts:
+    // - A whole new "KQOLRF" category/tab surfaced a real bug in BOTE's own
+    //   (all currently released versions of it) input registration code --
+    //   it re-registers its category without a re-entry guard, corrupting
+    //   the Controls menu's layout once a second mod's category also
+    //   existed.
+    // - Adding a "Toggle PCR"/"PCR Modifier" action into the EXISTING
+    //   "Flight" category instead avoided that specific bug, but the
+    //   action was hand-rolled with a deliberately huge, self-assigned id
+    //   (300000-350000 range) spliced directly into userData.actions/
+    //   actionCategoryMap -- this broke keybind reassignment game-wide,
+    //   not just for our own two actions. Briefly replaced with a
+    //   BepInEx ConfigManager KeyboardShortcut instead (zero Rewired
+    //   involvement, but keyboard-only, no controller combo).
+    // - Currently back on native Controls-menu actions (see
+    //   PcrToggleActionPatch), this time created entirely through
+    //   UserData's own public AddAction API instead of a self-assigned id
+    //   -- the vanilla game's own actions only ever use ids 0-64
+    //   (confirmed against the actual shipped Rewired data), so the
+    //   previous attempt's wildly-out-of-range id is the leading suspect
+    //   for what broke everything else. This is still an experiment on an
+    //   internal build, not a confirmed fix -- Rewired's own
+    //   initialization is commercially obfuscated and not fully
+    //   traceable. A rebind attempt duplicated the player's controller in
+    //   Rewired's own controller list -- currently investigating that
+    //   specific symptom rather than reverting outright. If this can't be
+    //   resolved, revert to the ConfigManager KeyboardShortcut approach
+    //   (see this file's own git history) and delete
+    //   PcrToggleActionPatch.cs again.
+    //
+    //  - Toggle key ("Toggle PCR"): a direct single-key toggle.
+    //  - Modifier key ("PCR Modifier"): held alongside the vanilla
+    //    Countermeasures button/key to toggle PCR as a combo -- works for
+    //    a controller button too, since it's a real Rewired action like
+    //    any other. While it's held, the vanilla manual-fire path is also
     //    suppressed (see DeployCountermeasureLockoutPatch) so the same
-    //    button press used for the toggle combo never ALSO fires a real
+    //    press used for the toggle combo never ALSO fires a real
     //    countermeasure release.
+    // Both ship unbound -- the player assigns them in the native Controls
+    // menu under Flight.
     //
     // Won't turn on while the Radar Jammer is the selected countermeasure
     // -- PCR is for automatic flare dispensing, not ECM, so a toggle
@@ -176,7 +193,6 @@ namespace QOL_Realisim_Fixes
             _wasTriggerHeld = held;
 
             Player playerInput = GameManager.playerInput;
-            Patches.PcrToggleActionPatch.EnsureDefaultKeyboardBinding(playerInput);
 
             bool nativeActionPressed = playerInput != null && playerInput.GetButtonDown(Patches.PcrToggleActionPatch.ActionName);
             bool modifierHeld = IsModifierHeld();

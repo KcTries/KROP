@@ -37,4 +37,39 @@ namespace QOL_Realisim_Fixes.Patches
                 ___swingSource, muffleMultiplier: CockpitLowpassConfig.InternalMechanicalMuffleMultiplier);
         }
     }
+
+    // RotorShaft.AnimateRotor() is the private method that sets
+    // rotorSource.pitch/.volume every Update() -- purely presentational,
+    // same shape as TurbineEngine.Animate(), so a Postfix here is the
+    // right hook point. No propagation delay needed (same reasoning as
+    // tire noise/airbrake -- the rotor disc is directly overhead/co-located
+    // with the aircraft, not a distant source), so this uses the same
+    // lightweight direct-on-real-source path rather than a tracked clone.
+    // Left at full cockpit-filter strength (no muffleMultiplier override)
+    // rather than the Internal Mechanical Sound Multiplier used above --
+    // rotor chop is the iconic, genuinely-loud aerodynamic blade noise a
+    // real helicopter cockpit doesn't meaningfully shield you from, closer
+    // in character to engine/tire noise than to a hinge or gearbox heard
+    // through the airframe. rotorSource is a serialized field that always
+    // exists (unlike swingSource, never null-checked before use in
+    // AnimateRotor itself), so no null guard needed here either --
+    // ApplyCockpitOnlyLowpass already no-ops safely on a null source
+    // regardless. Vanilla's own RotorShaft.SetInteriorSounds(bool) swaps
+    // rotorSource.clip between separate interior/exterior recordings on
+    // its own, entirely independent of this -- this only layers cockpit-
+    // only filtering on top of whichever clip is currently assigned,
+    // the same "don't re-derive what vanilla already does, just filter its
+    // output" approach used for ExplosionAudioManager elsewhere in this
+    // mod. RotorShaft.RotorStrike()'s separate one-shot strikeSource is
+    // untouched -- vanilla explicitly sets bypassEffects=true on it, a
+    // deliberate choice (likely so a rotor-strike damage cue always reads
+    // clearly regardless of view) this isn't overriding without being asked.
+    [HarmonyPatch(typeof(RotorShaft), "AnimateRotor")]
+    internal static class RotorShaftCockpitFilterPatch
+    {
+        private static void Postfix(AudioSource ___rotorSource)
+        {
+            SoundPropagation.ApplyCockpitOnlyLowpass(___rotorSource);
+        }
+    }
 }

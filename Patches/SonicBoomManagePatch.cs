@@ -55,9 +55,10 @@ namespace QOL_Realisim_Fixes.Patches
         // the shared sonicBoom clip up approximates that without a separate
         // audio asset. Set once here, on the boom's own AudioSource, rather
         // than passed around: CopyAudioSourceSettings already carries pitch
-        // through to every delayed clone downstream, and PlayOneShotDelayed
-        // below reads it back to also pick the tighter double-crack gap.
-        private const float MissileBoomPitch = 1.8f;
+        // through to every delayed clone downstream. Originally 1.8 -- scaled
+        // back down to 1.25 as too aggressive once real missile-boom samples
+        // (SonicBoomAssets) replaced the shared aircraft clip below.
+        private const float MissileBoomPitch = 1.25f;
 
         private static void ConstructorPostfix(Unit supersonicUnit, AudioSource ___source)
         {
@@ -68,26 +69,13 @@ namespace QOL_Realisim_Fixes.Patches
         }
 
         // A real sonic boom is actually two shocks -- a bow shock off the
-        // nose and a trailing shock off the tail -- heard as a quick
-        // double-crack rather than a single bang. Scheduling the same clip
-        // twice, the second with a small extra delay on top of the normal
-        // propagation delay, approximates that N-wave without needing a
-        // second audio asset. Two full-length copies of the same clip
-        // overlapping at only a tenth of a second apart read as a muddy
-        // echo rather than a crisp double-crack, so the first (bow shock)
-        // copy is cut short instead of left to ring out -- the second
-        // (trailing shock) copy is the one that actually plays out in full.
-        //
-        // A missile's bow-to-tail gap would need to be much shorter than an
-        // aircraft's, proportional to its much shorter length -- short
-        // enough that the two copies land almost on top of each other, which
-        // read as a stutter/glitch rather than a real double-crack. Missiles
-        // just get a single, undoubled crack instead -- still cut short
-        // rather than left to ring out, same reasoning as the aircraft's
-        // bow shock, so the pitched-up clip reads as a sharp snap instead of
-        // a lingering boom tail.
-        private const float TrailingShockGapSeconds = 0.1f;
-        private const float FirstShockClipSeconds = 0.08f;
+        // nose and a trailing shock off the tail, heard as a quick
+        // double-crack rather than a single bang. Originally approximated by
+        // scheduling the same clip twice in a row -- dropped once real boom
+        // samples (SonicBoomAssets) replaced the shared aircraft clip, since
+        // it didn't read as a clean double-crack with those samples the way
+        // it did with vanilla's own single clip. Every boom (aircraft near,
+        // aircraft far, missile) is a single full-length shot now.
         private const float MissileBoomClipDurationSeconds = 0.35f;
 
         // [BoomDiag] confirmed a single missile pass can trip vanilla's own
@@ -147,26 +135,44 @@ namespace QOL_Realisim_Fixes.Patches
 
             Vector3 position = source.transform.position;
             bool isMissileBoom = source.pitch > 1f;
+            CameraStateManager cam = SceneSingleton<CameraStateManager>.i;
+            float distanceToListener = cam != null ? Vector3.Distance(position, cam.transform.position) : 0f;
 
             if (VerboseLoggingConfig.Enabled.Value)
             {
-                CameraStateManager cam = SceneSingleton<CameraStateManager>.i;
-                float distance = cam != null ? Vector3.Distance(position, cam.transform.position) : -1f;
                 SoundPropagation.Log.LogInfo(
                     $"[BoomDiag] PlayOneShot for '{source.GetInstanceID()}' at t={now:F2} "
                     + $"isMissile={isMissileBoom} pitch={source.pitch:F2} "
-                    + $"position={position} distanceToListener={distance:F1}");
+                    + $"position={position} distanceToListener={distanceToListener:F1}");
             }
 
+            // clip (vanilla's own shared sonicBoom asset) is only ever a
+            // fallback now -- SonicBoomAssets supplies the real custom clip,
+            // randomized per pool so the same exact sample never repeats
+            // twice in a row.
             if (isMissileBoom)
             {
+                AudioClip missileClip = SonicBoomAssets.GetRandomMissile() ?? clip;
                 SoundPropagation.ScheduleDelayedOneShot(
-                    source, clip, position, clipDurationSeconds: MissileBoomClipDurationSeconds);
+                    source, missileClip, position, clipDurationSeconds: MissileBoomClipDurationSeconds);
+            }
+            else if (distanceToListener >= SonicBoomAssets.FarDistanceThresholdMeters)
+            {
+                AudioClip farClip = SonicBoomAssets.GetRandomFar() ?? clip;
+                // Overrides the temp source's own rolloff range so a far
+                // boom always plays as loud as if heard from exactly
+                // FarDistanceThresholdMeters, fading out toward
+                // FarMaxAudibleDistanceMeters -- not attenuated down using
+                // whatever the real (often much larger) distance is.
+                SoundPropagation.ScheduleDelayedOneShot(
+                    source, farClip, position,
+                    minDistanceOverride: SonicBoomAssets.FarDistanceThresholdMeters,
+                    maxDistanceOverride: SonicBoomAssets.FarMaxAudibleDistanceMeters);
             }
             else
             {
-                SoundPropagation.ScheduleDelayedOneShot(source, clip, position, clipDurationSeconds: FirstShockClipSeconds);
-                SoundPropagation.ScheduleDelayedOneShot(source, clip, position, TrailingShockGapSeconds);
+                AudioClip nearClip = SonicBoomAssets.GetRandomNear() ?? clip;
+                SoundPropagation.ScheduleDelayedOneShot(source, nearClip, position);
             }
         }
     }

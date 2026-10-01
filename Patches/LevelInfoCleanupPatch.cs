@@ -16,6 +16,7 @@ namespace QOL_Realisim_Fixes.Patches
         {
             SoundPropagation.ClearAll();
             PeriodicCountermeasureControl.ClearAll();
+            FuelTankFireballVariantPatch.ResetCache();
         }
     }
 }

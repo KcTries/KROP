@@ -70,5 +70,33 @@ namespace QOL_Realisim_Fixes
             }
             return false;
         }
+
+        // Helicopter cockpits sit right next to/above the engine deck with
+        // far less acoustic sealing around it than a fixed-wing jet's
+        // canopy -- turbine whine reaches the cabin much more directly.
+        // Separate from GetMuffleMultiplier() above: this only ever scales
+        // the turbine engine sound specifically (see TurbineEngineAnimatePatch),
+        // not rotor/fan/mechanical sounds, which keep the normal cockpit
+        // filter on these same airframes.
+        private const float HelicopterTurbineMuffleMultiplier = 0.5f;
+
+        private static readonly System.Collections.Generic.HashSet<string> HelicopterJsonKeys =
+            new System.Collections.Generic.HashSet<string>
+        {
+            "UtilityHelo1",          // UH-90 Ibis
+            "AttackHelo1",           // SAH-46 Chicane
+            "Aryx_LightHelicopter1", // RAH-72 Knockout (Aryx mod)
+        };
+
+        internal static float GetTurbineMuffleMultiplier(Aircraft localAircraft)
+        {
+            if (localAircraft?.definition == null)
+            {
+                return 1f;
+            }
+            return HelicopterJsonKeys.Contains(localAircraft.definition.jsonKey)
+                ? HelicopterTurbineMuffleMultiplier
+                : 1f;
+        }
     }
 }
