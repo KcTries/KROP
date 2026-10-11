@@ -57,8 +57,14 @@ namespace QOL_Realisim_Fixes.Patches
                 // guaranteeing this runs whenever an afterburner might, and
                 // an Afterburner has no back-reference to its owning
                 // JetNozzle to look thrustAudio up the other way around.
-                AudioSource[] nozzleSources = _nozzleSourcesCache.GetValue(
-                    __instance, _ => BuildNozzleSourceList(___thrustAudio, ___afterburners));
+                // TryGetValue first: GetValue with a lambda that captures
+                // these parameters would allocate a closure on every call,
+                // cache hit or not -- every physics tick, per nozzle.
+                if (!_nozzleSourcesCache.TryGetValue(__instance, out AudioSource[] nozzleSources))
+                {
+                    nozzleSources = BuildNozzleSourceList(___thrustAudio, ___afterburners);
+                    _nozzleSourcesCache.Add(__instance, nozzleSources);
+                }
                 for (int i = 0; i < nozzleSources.Length; i++)
                 {
                     if (nozzleSources[i] != null)

@@ -16,9 +16,9 @@ namespace QOL_Realisim_Fixes
         internal static void Initialize(ConfigFile config)
         {
             // Used to be its own "Bullet Cracks" section with a single
-            // "Enable" entry -- folded into General as one toggle.
+            // "Enable" entry -- now a single toggle under Audio.
             Enabled = config.Bind(
-                "General",
+                "Audio",
                 "Bullet Cracks",
                 false,
                 "Plays a crack sound when bullets pass near the camera and are going supersonic. PERFORMANCE HEAVY!!!");

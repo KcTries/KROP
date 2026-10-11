@@ -41,11 +41,8 @@ namespace QOL_Realisim_Fixes
 
             // 0 = play the clip out in full (original behavior). Above
             // zero, playback is cut short this many seconds after it
-            // actually starts -- used to truncate a sonic boom's leading
-            // shock so a closely-following second copy of the same clip
-            // (the trailing shock) isn't stepping on/overlapping a full-
-            // length copy of itself, which read as a muddy echo rather than
-            // a crisp double-crack.
+            // actually starts -- currently only the bullet crack uses this,
+            // to keep just the sharp leading transient of its clip.
             public float ClipDurationSeconds;
             public bool Started;
             public float PlayStartTime;
@@ -394,7 +391,7 @@ namespace QOL_Realisim_Fixes
             // a multiplier of 1 (the overwhelming majority of airframes,
             // always when the feature is off) leaves this line a no-op.
             cutoff = Mathf.Lerp(LowpassMaxCutoffHz, cutoff, GetAirframeCockpitMuffleMultiplier());
-            cutoff = Mathf.Lerp(cutoff, LowpassMaxCutoffHz, GetEjectionMuffleReleaseBlend());
+            cutoff = Mathf.Lerp(cutoff, LowpassMaxCutoffHz, GetMuffleReleaseBlend());
             _cachedCockpitLowpassFrame = Time.frameCount;
             _cachedCockpitLowpassCutoff = cutoff;
             return cutoff;
@@ -492,6 +489,19 @@ namespace QOL_Realisim_Fixes
             return Mathf.Clamp01(elapsed / EjectionMuffleReleaseSeconds);
         }
 
+        // 0..1, how far open the local player's canopy is (see
+        // AircraftDoorControl, which updates it every frame): the cockpit
+        // filter opens up as the canopy opens and fades back into the
+        // muffling as it closes, following the actual canopy angle. Combined
+        // with the ejection release by taking whichever is more open, so an
+        // ejection (which latches fully open) still wins.
+        internal static float CanopyOpenBlend;
+
+        private static float GetMuffleReleaseBlend()
+        {
+            return Mathf.Max(GetEjectionMuffleReleaseBlend(), CanopyOpenBlend);
+        }
+
         // Internal rather than private -- ExplosionAudioCockpitFilterPatch
         // needs this (and ResonanceEdgeEpsilonHz above) to decide whether
         // creating its own highpass filter would be a genuine no-op, the
@@ -519,7 +529,7 @@ namespace QOL_Realisim_Fixes
                 ? CockpitLowpassConfig.HighpassCutoffHz
                 : HighpassMinCutoffHz;
             cutoff = Mathf.Lerp(HighpassMinCutoffHz, cutoff, GetAirframeCockpitMuffleMultiplier());
-            cutoff = Mathf.Lerp(cutoff, HighpassMinCutoffHz, GetEjectionMuffleReleaseBlend());
+            cutoff = Mathf.Lerp(cutoff, HighpassMinCutoffHz, GetMuffleReleaseBlend());
             _cachedCockpitHighpassFrame = Time.frameCount;
             _cachedCockpitHighpassCutoff = cutoff;
             return cutoff;
@@ -569,6 +579,8 @@ namespace QOL_Realisim_Fixes
         // via a tiny physics query centered exactly on that point, rather
         // than transplanting a local variable out of a vanilla method via a
         // transpiler for what's otherwise a one-line lookup.
+        private static readonly Collider[] _ownHitColliders = new Collider[16];
+
         internal static bool TryGetOwnAirframeHitDistance(Vector3 position, out float distanceToCockpitMeters)
         {
             distanceToCockpitMeters = 0f;
@@ -594,11 +606,12 @@ namespace QOL_Realisim_Fixes
             // Small enough to reliably land on just the collider that was
             // actually hit (the impact position sits exactly on its
             // surface), while still forgiving normal floating-point slop
-            // right at that boundary.
-            Collider[] hits = Physics.OverlapSphere(position, 0.25f);
-            for (int i = 0; i < hits.Length; i++)
+            // right at that boundary. Non-alloc into a shared buffer -- this
+            // runs for every impact near the player's own aircraft.
+            int hitCount = Physics.OverlapSphereNonAlloc(position, 0.25f, _ownHitColliders);
+            for (int i = 0; i < hitCount; i++)
             {
-                IDamageable damageable = hits[i].gameObject.GetComponent<IDamageable>();
+                IDamageable damageable = _ownHitColliders[i].gameObject.GetComponent<IDamageable>();
                 if (damageable == null)
                 {
                     continue;
@@ -619,153 +632,366 @@ namespace QOL_Realisim_Fixes
         // is cheap and shouldn't require paying for that just to get it.
         // Every engine-type patch's own "system off" branch calls this
         // directly on the REAL, live AudioSource instead of a tracked
-        // clone -- a ConditionalWeakTable caches the lazily-added filter
-        // pair per source so repeated per-frame calls are just a lookup
-        // plus a few scalar writes, not a fresh GetComponent/AddComponent
-        // check every time. Despite the name (kept to avoid touching all
-        // eight call sites), this now manages both the lowpass and the
-        // highpass.
-        private class CockpitOnlyFilters
+        // clone.
+        //
+        // Unity applies AudioLowPassFilter/AudioHighPassFilter to the
+        // COMBINED output of every AudioSource on the same GameObject, so
+        // the filters, the safety verdict and the muffle strength all
+        // belong to the GameObject, not to any one source -- one of these
+        // per GameObject that hosts a filtered source, shared by every
+        // source on it that calls ApplyCockpitOnlyLowpass.
+        private class CockpitFilterHost
         {
+            // Each created lazily (see EnsureLowpassFilter/
+            // EnsureHighpassFilter) only once its own cutoff would actually
+            // do something -- the highpass in particular is never needed
+            // while CockpitLowpassConfig.HighpassEnabled is off, and merely
+            // having one attached was root-caused as an audible artifact.
             public AudioLowPassFilter Lowpass;
             public AudioHighPassFilter Highpass;
+            // Whether this mod added them (vs. reusing ones already on the
+            // GameObject) -- only ours get removed if the host turns unsafe.
+            public bool OwnsLowpass;
+            public bool OwnsHighpass;
 
-            // Once true, Lowpass/Highpass are guaranteed non-null and the
-            // safety check below is never repeated for this source again --
-            // a GameObject's set of AudioSources doesn't change once every
-            // sound-emitting component on it has actually initialized.
-            public bool FiltersCreated;
-
-            // Logged once per source the first time it's found unsafe, not
-            // once ever globally and not every frame -- see the check
-            // below for why this can't just be cached permanently like
-            // FiltersCreated.
+            // Last safety verdict, re-evaluated every
+            // HostSafetyRecheckSeconds -- see IsSafeToFilter.
+            public bool Safe;
+            public bool Checked;
+            public float NextSafetyCheckTime;
             public bool UnsafeLogged;
+
+            // The strongest muffling any source on this GameObject asked
+            // for. Two sources sharing one filter but asking for different
+            // strengths (an engine at full strength sharing its GameObject
+            // with a bay door at the Internal Mechanical Sound Multiplier,
+            // as on the Darkreach) would otherwise each rewrite the same
+            // filter with a different cutoff every frame.
+            public float MuffleMultiplier;
+
+            // Every source that's called ApplyCockpitOnlyLowpass for this
+            // GameObject, plus the siblings they declared -- see
+            // IsSafeToFilter.
+            public readonly HashSet<AudioSource> Accepted = new HashSet<AudioSource>();
+
+            // So several sources on one GameObject only write the shared
+            // filters once per frame.
+            public int LastAppliedFrame = -1;
+
+            // For TickFilterHosts -- see there.
+            public GameObject HostObject;
+            public bool Tracked;
+            public float SilentSince = -1f;
         }
 
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<AudioSource, CockpitOnlyFilters>
-            _cockpitOnlyFilters = new System.Runtime.CompilerServices.ConditionalWeakTable<AudioSource, CockpitOnlyFilters>();
+        // Every host currently carrying filters, so idle ones can be found.
+        private static readonly List<CockpitFilterHost> _filteredHosts = new List<CockpitFilterHost>();
+        private static float _nextFilterHostTick;
+        private const float FilterHostTickSeconds = 0.25f;
+        private const float FilterHostIdleReleaseSeconds = 0.5f;
+
+        // Filters come off a GameObject once every AudioSource on it has been
+        // silent for FilterHostIdleReleaseSeconds -- silent sources need no
+        // filtering, and ApplyCockpitOnlyLowpass re-adds them the next time
+        // one plays and needs muffling. Needed because the game deletes
+        // temporary sources once they finish (LandingGear's fold sound 2s
+        // after the latch, the escape capsule's launch sound after 10s), and
+        // Unity refuses to remove a GameObject's last AudioSource while a
+        // filter that requires one is still on it ("Can't remove
+        // AudioSource because AudioLowPassFilter depends on it").
+        private static void TickFilterHosts()
+        {
+            if (_filteredHosts.Count == 0 || Time.unscaledTime < _nextFilterHostTick)
+            {
+                return;
+            }
+            _nextFilterHostTick = Time.unscaledTime + FilterHostTickSeconds;
+
+            float now = Time.unscaledTime;
+            for (int i = _filteredHosts.Count - 1; i >= 0; i--)
+            {
+                CockpitFilterHost host = _filteredHosts[i];
+                if (host.HostObject == null || (host.Lowpass == null && host.Highpass == null))
+                {
+                    host.Tracked = false;
+                    _filteredHosts.RemoveAt(i);
+                    continue;
+                }
+                if (AnySourcePlaying(host.HostObject))
+                {
+                    host.SilentSince = -1f;
+                    continue;
+                }
+                if (host.SilentSince < 0f)
+                {
+                    host.SilentSince = now;
+                    continue;
+                }
+                if (now - host.SilentSince >= FilterHostIdleReleaseSeconds)
+                {
+                    RemoveOwnedFilters(host);
+                    // Re-evaluated (and any filter not ours re-adopted) the
+                    // next time a source here asks for muffling.
+                    host.Checked = false;
+                    host.Safe = false;
+                    host.SilentSince = -1f;
+                    host.Tracked = false;
+                    _filteredHosts.RemoveAt(i);
+                }
+            }
+        }
+
+        private static bool AnySourcePlaying(GameObject hostObject)
+        {
+            hostObject.GetComponents(_coHostedSources);
+            bool playing = false;
+            for (int i = 0; i < _coHostedSources.Count; i++)
+            {
+                if (_coHostedSources[i] != null && _coHostedSources[i].isPlaying)
+                {
+                    playing = true;
+                    break;
+                }
+            }
+            _coHostedSources.Clear();
+            return playing;
+        }
+
+        private const float HostSafetyRecheckSeconds = 1f;
+
+        // Reused by IsSafeToFilter instead of allocating a fresh
+        // GetComponents array each time.
+        private static readonly List<AudioSource> _coHostedSources = new List<AudioSource>();
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameObject, CockpitFilterHost>
+            _cockpitFilterHosts = new System.Runtime.CompilerServices.ConditionalWeakTable<GameObject, CockpitFilterHost>();
 
         // acceptedSiblings lists other AudioSource(s) this mod ALSO manages
         // (via their own separate ApplyCockpitOnlyLowpass call) that are
         // known to legitimately live on the same GameObject as realSource --
         // e.g. LandingGear's tireNoiseSound/tireSkidSound, a ground
         // vehicle's engineIdleSound/engineDriveSound, or a gun's own
-        // sources[] array sharing a GameObject with its recoilSound (those
-        // never actually play on the real source at all once ShotSound()
-        // is fully replaced, so they're harmless to co-filter). Without
-        // this, two of this mod's own sources sharing one GameObject looked
-        // identical to the real problem this check exists for (one of our
-        // sources sharing a GameObject with something genuinely unrelated,
-        // like ThreatList's missile alarm) and got the same "skip filtering
-        // entirely" treatment -- silently leaving tire/engine sound
-        // unfiltered on whichever aircraft's prefab happens to put both
-        // sources on one object instead of two.
-        //
-        // The safety check itself is re-evaluated every call rather than
-        // locked in once and cached (only whether the FILTER COMPONENTS
-        // have been created is cached) -- a source whose sibling hasn't
-        // been created/registered YET (e.g. JetNozzle's thrustAudio ticking
-        // before any Afterburner has ever run once) would otherwise be
-        // judged unsafe on its very first call and stay stuck that way
-        // forever even after the sibling shows up. Re-checking is just a
-        // GetComponents<AudioSource> + a linear scan of a tiny array, cheap
-        // enough for a per-frame call; a source that's genuinely sharing
-        // with unrelated, never-registered vanilla audio (e.g. AoA
-        // feedback's source on the aircraft's cockpit GameObject) simply
-        // never converges and re-checks every call for its whole lifetime,
-        // which is the correct (if slightly wasteful) outcome for that case.
+        // sources[] array sharing a GameObject with its recoilSound.
         internal static void ApplyCockpitOnlyLowpass(AudioSource realSource, AudioSource[] acceptedSiblings = null, float muffleMultiplier = 1f)
         {
             if (realSource == null)
             {
                 return;
             }
-            if (!_cockpitOnlyFilters.TryGetValue(realSource, out CockpitOnlyFilters filters))
+
+            GameObject hostObject = realSource.gameObject;
+            if (!_cockpitFilterHosts.TryGetValue(hostObject, out CockpitFilterHost host))
             {
-                filters = new CockpitOnlyFilters();
-                _cockpitOnlyFilters.Add(realSource, filters);
+                host = new CockpitFilterHost { MuffleMultiplier = muffleMultiplier, HostObject = hostObject };
+                _cockpitFilterHosts.Add(hostObject, host);
+            }
+            else if (muffleMultiplier > host.MuffleMultiplier)
+            {
+                host.MuffleMultiplier = muffleMultiplier;
             }
 
-            // Computed up front so filter creation can be skipped entirely
-            // below when both would be a genuine no-op. Root-caused: merely
-            // HAVING an AudioLowPassFilter/AudioHighPassFilter attached --
-            // even at "neutral" 22000Hz/10Hz settings that should be
-            // inaudible -- produced a reported high-pitched warble that
-            // tracked camera movement, on sources that otherwise never
-            // needed any muffling at all (confirmed via a disable-KROP
-            // A/B test that this mod was the cause, then narrowed down by
-            // elimination: dopplerLevel/spatialBlend/bypassEffects were all
-            // confirmed untouched or already at these values in the
-            // vanilla prefab data). 22000Hz sits right at the edge of what's
-            // numerically well-behaved for a filter running against 44.1kHz
-            // audio (Nyquist = 22050Hz), which is the likely mechanism.
-            // Never creating the components at all until a source actually
-            // needs real muffling sidesteps the whole class of artifact
-            // rather than trying to tune around it.
-            float lowpassCutoff = ApplyMuffleMultiplier(LowpassMaxCutoffHz, ComputeCockpitLowpassCutoffOnly(), muffleMultiplier);
-            float highpassCutoff = ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), muffleMultiplier);
+            host.Accepted.Add(realSource);
+            if (acceptedSiblings != null)
+            {
+                foreach (AudioSource sibling in acceptedSiblings)
+                {
+                    if (sibling != null)
+                    {
+                        host.Accepted.Add(sibling);
+                    }
+                }
+            }
+
+            // Computed up front so filter creation (and the safety check)
+            // can be skipped entirely below when both would be a genuine
+            // no-op. Root-caused: merely HAVING an AudioLowPassFilter/
+            // AudioHighPassFilter attached -- even at "neutral" 22000Hz/10Hz
+            // settings that should be inaudible -- produced a reported
+            // high-pitched warble that tracked camera movement, on sources
+            // that otherwise never needed any muffling at all (confirmed via
+            // a disable-KROP A/B test that this mod was the cause, then
+            // narrowed down by elimination: dopplerLevel/spatialBlend/
+            // bypassEffects were all confirmed untouched or already at these
+            // values in the vanilla prefab data). 22000Hz sits right at the
+            // edge of what's numerically well-behaved for a filter running
+            // against 44.1kHz audio (Nyquist = 22050Hz), which is the likely
+            // mechanism. Never creating the components at all until a source
+            // actually needs real muffling sidesteps the whole class of
+            // artifact rather than trying to tune around it.
+            float lowpassCutoff = ApplyMuffleMultiplier(LowpassMaxCutoffHz, ComputeCockpitLowpassCutoffOnly(), host.MuffleMultiplier);
+            float highpassCutoff = ApplyMuffleMultiplier(HighpassMinCutoffHz, ComputeCockpitHighpassCutoffHz(), host.MuffleMultiplier);
             bool wouldBeNoOp = lowpassCutoff >= LowpassMaxCutoffHz - ResonanceEdgeEpsilonHz
                 && highpassCutoff <= HighpassMinCutoffHz + ResonanceEdgeEpsilonHz;
-            if (!filters.FiltersCreated && wouldBeNoOp)
+            if (host.Lowpass == null && host.Highpass == null && wouldBeNoOp)
             {
                 return;
             }
 
-            if (!filters.FiltersCreated)
+            if (!host.Checked || Time.unscaledTime >= host.NextSafetyCheckTime)
             {
-                // Unity applies AudioLowPassFilter/AudioHighPassFilter to
-                // the COMBINED output of every AudioSource on the same
-                // GameObject, not just the one this call intends to shape --
-                // if this real source's GameObject happens to also host some
-                // completely unrelated AudioSource (a UI/alert sound this
-                // mod was never meant to touch -- e.g. ThreatList's missile-
-                // incoming alarm loop, added directly onto the aircraft's
-                // own root GameObject), adding a filter here would silently
-                // muffle that one too. Reported symptom this was written
-                // for: "missile warning beep sometimes muted." Rather than
-                // rebuild this widely-used function around an isolated
-                // clone just to be sure, this fails toward safety instead:
-                // if any unaccepted sharing is detected, skip touching
-                // bypassEffects/filters on this source for now.
-                bool safe = true;
-                AudioSource[] coHostedSources = realSource.gameObject.GetComponents<AudioSource>();
-                for (int i = 0; i < coHostedSources.Length; i++)
+                bool wasSafe = host.Safe;
+                host.Checked = true;
+                host.NextSafetyCheckTime = Time.unscaledTime + HostSafetyRecheckSeconds;
+                host.Safe = IsSafeToFilter(hostObject, host);
+                if (host.Safe && !wasSafe)
                 {
-                    AudioSource coHosted = coHostedSources[i];
-                    if (coHosted == realSource || (acceptedSiblings != null && System.Array.IndexOf(acceptedSiblings, coHosted) >= 0))
+                    // Reuses any filter already on the GameObject rather
+                    // than stacking a second one.
+                    if (host.Lowpass == null)
                     {
-                        continue;
+                        host.Lowpass = hostObject.GetComponent<AudioLowPassFilter>();
                     }
-                    safe = false;
-                    break;
-                }
-                if (!safe)
-                {
-                    if (!filters.UnsafeLogged)
+                    if (host.Highpass == null)
                     {
-                        filters.UnsafeLogged = true;
+                        host.Highpass = hostObject.GetComponent<AudioHighPassFilter>();
+                    }
+                }
+                else if (!host.Safe)
+                {
+                    RemoveOwnedFilters(host);
+                    if (!host.UnsafeLogged && VerboseLoggingConfig.Enabled.Value)
+                    {
+                        host.UnsafeLogged = true;
                         Log.LogInfo(
-                            $"[CockpitFilterShareDiag] Skipping cockpit-only filter for '{realSource.gameObject.name}' -- "
-                            + "its GameObject hosts more than one AudioSource, and Unity's filter components can't be "
-                            + "scoped to just one of them.");
+                            $"[CockpitFilterShareDiag] Skipping cockpit-only filter for '{hostObject.name}' -- "
+                            + "its GameObject also hosts a 2D (cockpit/UI) AudioSource this mod doesn't manage, and "
+                            + "Unity's filter components can't be scoped to just one source.");
                     }
-                    return;
                 }
-                filters.Lowpass = realSource.GetComponent<AudioLowPassFilter>() ?? realSource.gameObject.AddComponent<AudioLowPassFilter>();
-                filters.Highpass = realSource.GetComponent<AudioHighPassFilter>() ?? realSource.gameObject.AddComponent<AudioHighPassFilter>();
-                filters.FiltersCreated = true;
             }
-            // Same reasoning as CopyAudioSourceSettings' bypassEffects override
-            // -- this runs directly on the real, live engine source rather
-            // than a copy, so if that particular engine's own AudioSource
-            // ships with bypassEffects=true, the filters just below would be
-            // silently ignored by Unity regardless of their cutoff.
-            realSource.bypassEffects = false;
-            filters.Lowpass.lowpassResonanceQ = LowpassResonanceFor(lowpassCutoff);
-            filters.Lowpass.cutoffFrequency = lowpassCutoff;
-            filters.Highpass.highpassResonanceQ = HighpassResonanceFor(highpassCutoff);
-            filters.Highpass.cutoffFrequency = highpassCutoff;
+            if (!host.Safe)
+            {
+                return;
+            }
+
+            if (host.LastAppliedFrame != Time.frameCount)
+            {
+                host.LastAppliedFrame = Time.frameCount;
+                bool hadLowpass = host.Lowpass != null;
+                bool hadHighpass = host.Highpass != null;
+                EnsureLowpassFilter(hostObject, ref host.Lowpass, lowpassCutoff);
+                EnsureHighpassFilter(hostObject, ref host.Highpass, highpassCutoff);
+                host.OwnsLowpass |= !hadLowpass && host.Lowpass != null;
+                host.OwnsHighpass |= !hadHighpass && host.Highpass != null;
+                if (!host.Tracked && (host.Lowpass != null || host.Highpass != null))
+                {
+                    host.Tracked = true;
+                    host.SilentSince = -1f;
+                    _filteredHosts.Add(host);
+                    EnsureDriver();
+                }
+            }
+            // This runs directly on the real, live source rather than a
+            // copy, so if it ships with bypassEffects=true, the filters
+            // above would be silently ignored by Unity regardless of their
+            // cutoff.
+            if (host.Lowpass != null || host.Highpass != null)
+            {
+                realSource.bypassEffects = false;
+            }
+        }
+
+        // Fails toward safety: a filter here would also muffle every other
+        // AudioSource on the GameObject. Fine for this mod's own sources
+        // and for any other 3D source -- a 3D source on an aircraft part is
+        // that airframe's own world sound (an engine's bay door, a nozzle's
+        // swivel motor) and belongs behind the same cockpit muffling. Not
+        // fine for a 2D one: those are the cockpit's own alerts (ThreatList's
+        // missile alarm on the aircraft root, the AoA horn, the RPM/VRS
+        // warnings, AoA feedback on the cockpit), which the game adds at
+        // runtime as 2D sources -- reported symptom this check was written
+        // for: "missile warning beep sometimes muted." A source with
+        // bypassEffects on ignores filters anyway (StatusDisplay's damage
+        // alert). Re-checked every HostSafetyRecheckSeconds rather than
+        // passed once and trusted forever, since those alerts can be added
+        // to a GameObject after its first check.
+        //
+        // Never the AudioListener's own GameObject, whatever's on it: filter
+        // components there act on the listener -- the entire mix, every
+        // sound in the game -- not on its sources. That's the Main Camera,
+        // which also hosts CameraStateManager's windNoiseExternal (filtered
+        // by WindNoiseCockpitFilterPatch) next to a bypassEffects cockpit
+        // rattle; once the bypassEffects rule let that through, the cockpit
+        // lowpass muffled the gear warning, HUD blips and RWR audio too.
+        private static bool IsSafeToFilter(GameObject hostObject, CockpitFilterHost host)
+        {
+            if (hostObject.GetComponent<AudioListener>() != null)
+            {
+                return false;
+            }
+
+            hostObject.GetComponents(_coHostedSources);
+            bool safe = true;
+            for (int i = 0; i < _coHostedSources.Count; i++)
+            {
+                AudioSource coHosted = _coHostedSources[i];
+                if (coHosted == null || host.Accepted.Contains(coHosted) || coHosted.bypassEffects || coHosted.spatialBlend > 0f)
+                {
+                    continue;
+                }
+                safe = false;
+                break;
+            }
+            _coHostedSources.Clear();
+            return safe;
+        }
+
+        private static void RemoveOwnedFilters(CockpitFilterHost host)
+        {
+            if (host.OwnsLowpass && host.Lowpass != null)
+            {
+                UnityEngine.Object.Destroy(host.Lowpass);
+            }
+            if (host.OwnsHighpass && host.Highpass != null)
+            {
+                UnityEngine.Object.Destroy(host.Highpass);
+            }
+            host.Lowpass = null;
+            host.Highpass = null;
+            host.OwnsLowpass = false;
+            host.OwnsHighpass = false;
+        }
+
+        // For sources whose game code only ever starts them (RandomSound's
+        // ambience, the escape capsule's launch sound, a ground/ship
+        // launcher's launch sound) -- there's no per-frame game method to
+        // hook, so they're re-filtered from TickInner every frame they're
+        // playing instead, keeping the cutoff in step with view changes
+        // mid-sound. Dropped once destroyed.
+        private static readonly List<AudioSource> _keptFiltered = new List<AudioSource>();
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<AudioSource, object> _keptFilteredSet =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<AudioSource, object>();
+
+        internal static void KeepCockpitFiltered(AudioSource source)
+        {
+            if (source == null)
+            {
+                return;
+            }
+            if (!_keptFilteredSet.TryGetValue(source, out _))
+            {
+                _keptFilteredSet.Add(source, null);
+                _keptFiltered.Add(source);
+                EnsureDriver();
+            }
+            ApplyCockpitOnlyLowpass(source);
+        }
+
+        private static void TickKeptFiltered()
+        {
+            for (int i = _keptFiltered.Count - 1; i >= 0; i--)
+            {
+                AudioSource source = _keptFiltered[i];
+                if (source == null)
+                {
+                    _keptFiltered.RemoveAt(i);
+                    continue;
+                }
+                if (source.isPlaying)
+                {
+                    ApplyCockpitOnlyLowpass(source);
+                }
+            }
         }
 
         // Engines' TickEngines() clamps how fast its history-playback
@@ -1404,6 +1630,11 @@ namespace QOL_Realisim_Fixes
             // the clone's actual position toward that sampled target (a
             // little extra lag on top of an already-delayed position, so
             // imperceptible on its own) gives Unity a clean signal instead.
+            // Datum.origin-relative, same as the history samples: kept in
+            // world space, a floating-origin shift (every ~1km of camera
+            // travel) left it 1000+ m stale, so the clone was yanked away
+            // and swept back over a few frames -- an audible dropout and a
+            // Doppler spike on every shift.
             public Vector3 SmoothedPosition;
             public Vector3 SmoothVelocity;
             public bool HasSmoothedPosition;
@@ -1778,12 +2009,14 @@ namespace QOL_Realisim_Fixes
                     // Positions in history are Datum.origin-relative (see
                     // RecordEngineSample) -- convert back to world space
                     // using the CURRENT origin, so a shift that happened
-                    // since this sample was recorded doesn't matter.
+                    // since this sample was recorded doesn't matter. The
+                    // smoothing itself also runs in that origin-relative
+                    // space (see EngineState.SmoothedPosition).
                     Vector3 clonePosition = Datum.origin.TransformPoint(sample.Position);
 
                     if (!state.HasSmoothedPosition)
                     {
-                        state.SmoothedPosition = clonePosition;
+                        state.SmoothedPosition = sample.Position;
                         state.HasSmoothedPosition = true;
                         state.SmoothVelocity = Vector3.zero;
                     }
@@ -1791,13 +2024,14 @@ namespace QOL_Realisim_Fixes
                     {
                         float smoothTime = ComputePositionSmoothTime(clonePosition);
                         state.SmoothedPosition = Vector3.SmoothDamp(
-                            state.SmoothedPosition, clonePosition, ref state.SmoothVelocity, smoothTime);
+                            state.SmoothedPosition, sample.Position, ref state.SmoothVelocity, smoothTime);
                     }
                     // Gated on the clone's own smoothed velocity (a direct
                     // byproduct of the SmoothDamp above) relative to the
-                    // listener's -- see GateDopplerLevel.
+                    // listener's -- see GateDopplerLevel. Both are
+                    // origin-relative, so they compare like for like.
                     state.CloneSource.dopplerLevel = GateDopplerLevel(sample.DopplerLevel, state.SmoothVelocity);
-                    state.CloneObject.transform.position = state.SmoothedPosition;
+                    state.CloneObject.transform.position = Datum.origin.TransformPoint(state.SmoothedPosition);
                     float engineLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(clonePosition));
                     EnsureLowpassFilter(state.CloneObject, ref state.LowpassFilter, engineLowpassCutoff);
                     float engineHighpassCutoff = ComputeCockpitHighpassCutoffHz();
@@ -1886,6 +2120,9 @@ namespace QOL_Realisim_Fixes
             // straight to it produces a stair-stepped position signal that
             // Unity's automatic Doppler reads as noisy velocity. Smoothing
             // toward it instead gives a clean signal to compute Doppler from.
+            // All three positions are Datum.origin-relative -- see
+            // EngineState.SmoothedPosition for why world space broke on
+            // every floating-origin shift.
             public Vector3 SmoothedPosition;
             public Vector3 SmoothVelocity;
             public bool HasSmoothedPosition;
@@ -1930,14 +2167,15 @@ namespace QOL_Realisim_Fixes
             // Neither filter is created here -- see TickTrackedLoops, which
             // creates them lazily only once the live cutoff would do
             // something real (same reasoning as ApplyCockpitOnlyLowpass).
+            Vector3 originRelative = Datum.origin.InverseTransformPoint(position);
             _trackedLoops[template] = new TrackedLoopState
             {
                 CloneSource = cloneSource,
                 CloneObject = cloneObject,
                 StartTime = Time.timeSinceLevelLoad,
                 DelaySeconds = ComputeDelaySeconds(position),
-                TargetPosition = position,
-                SmoothedPosition = position,
+                TargetPosition = originRelative,
+                SmoothedPosition = originRelative,
                 HasSmoothedPosition = true
             };
         }
@@ -1976,7 +2214,7 @@ namespace QOL_Realisim_Fixes
         {
             if (template != null && _trackedLoops.TryGetValue(template, out TrackedLoopState state))
             {
-                state.TargetPosition = position;
+                state.TargetPosition = Datum.origin.InverseTransformPoint(position);
             }
         }
 
@@ -2022,12 +2260,13 @@ namespace QOL_Realisim_Fixes
                         // missile flashing past the camera up close is
                         // exactly the scenario where a fixed smoothing
                         // constant reads as the sound trailing behind it.
-                        float smoothTime = ComputePositionSmoothTime(state.TargetPosition);
+                        float smoothTime = ComputePositionSmoothTime(Datum.origin.TransformPoint(state.TargetPosition));
                         state.SmoothedPosition = Vector3.SmoothDamp(
                             state.SmoothedPosition, state.TargetPosition, ref state.SmoothVelocity, smoothTime);
                     }
-                    state.CloneObject.transform.position = state.SmoothedPosition;
-                    float trackedLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(state.SmoothedPosition));
+                    Vector3 smoothedWorldPosition = Datum.origin.TransformPoint(state.SmoothedPosition);
+                    state.CloneObject.transform.position = smoothedWorldPosition;
+                    float trackedLowpassCutoff = ComputeLowpassCutoffHz(GetDistanceToListener(smoothedWorldPosition));
                     EnsureLowpassFilter(state.CloneObject, ref state.LowpassFilter, trackedLowpassCutoff);
                     float trackedHighpassCutoff = ComputeCockpitHighpassCutoffHz();
                     EnsureHighpassFilter(state.CloneObject, ref state.HighpassFilter, trackedHighpassCutoff);
@@ -2345,23 +2584,26 @@ namespace QOL_Realisim_Fixes
         private static double _perfSummaryTotalMs;
         private static double _perfSummaryMaxMs;
         private static int _perfSummarySamples;
+        private static readonly System.Diagnostics.Stopwatch _perfStopwatch = new System.Diagnostics.Stopwatch();
 
-        // Always on, regardless of Verbose Logging -- this is the one
-        // diagnostic meant to answer "is this mod's own per-frame work
-        // actually the problem" directly, with real numbers, rather than
-        // guessing from code reading alone. Cheap (one Stopwatch per frame,
-        // one log line every 10s): tracked-object counts confirm whether
-        // the various leak/cleanup fixes elsewhere are actually holding
-        // steady in a real session instead of growing, and the timing
-        // shows how much of a frame this mod's own systems actually cost
-        // versus whatever else might be the real bottleneck.
+        // [PerfSummary] -- answers "is this mod's own per-frame work
+        // actually the problem" with real numbers: tracked-object counts
+        // (do the leak/cleanup fixes hold steady over a session?) plus how
+        // much of a frame Tick() costs. Only while Verbose Logging is on;
+        // it used to run (and log every 10s) for everyone.
         internal static void Tick()
         {
-            System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            TickInner();
-            stopwatch.Stop();
+            if (!VerboseLoggingConfig.Enabled.Value)
+            {
+                TickInner();
+                return;
+            }
 
-            double elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+            _perfStopwatch.Restart();
+            TickInner();
+            _perfStopwatch.Stop();
+
+            double elapsedMs = _perfStopwatch.Elapsed.TotalMilliseconds;
             _perfSummaryTotalMs += elapsedMs;
             _perfSummarySamples++;
             if (elapsedMs > _perfSummaryMaxMs)
@@ -2395,6 +2637,8 @@ namespace QOL_Realisim_Fixes
             TickLoops();
             TickEngines();
             TickTrackedLoops();
+            TickKeptFiltered();
+            TickFilterHosts();
 
             for (int i = _pending.Count - 1; i >= 0; i--)
             {
@@ -2473,7 +2717,11 @@ namespace QOL_Realisim_Fixes
                     else
                     {
                         _pending.RemoveAt(i);
-                        UnityEngine.Object.Destroy(shot.TempObject, shot.Clip.length + 0.5f);
+                        // Real playback time stretches with pitch (a 0.8x
+                        // pitched clip runs 25% longer), so a flat
+                        // clip.length could cut a low-pitched one short.
+                        float playSeconds = shot.Clip.length / Mathf.Max(0.01f, Mathf.Abs(shot.Source.pitch));
+                        UnityEngine.Object.Destroy(shot.TempObject, playSeconds + 0.5f);
                     }
                 }
             }

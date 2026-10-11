@@ -68,16 +68,6 @@ namespace QOL_Realisim_Fixes.Patches
             }
         }
 
-        // A real sonic boom is actually two shocks -- a bow shock off the
-        // nose and a trailing shock off the tail, heard as a quick
-        // double-crack rather than a single bang. Originally approximated by
-        // scheduling the same clip twice in a row -- dropped once real boom
-        // samples (SonicBoomAssets) replaced the shared aircraft clip, since
-        // it didn't read as a clean double-crack with those samples the way
-        // it did with vanilla's own single clip. Every boom (aircraft near,
-        // aircraft far, missile) is a single full-length shot now.
-        private const float MissileBoomClipDurationSeconds = 0.35f;
-
         // [BoomDiag] confirmed a single missile pass can trip vanilla's own
         // Mach-cone trigger twice within a couple of seconds: once via the
         // ordinary directional angle test while still far out, and again
@@ -113,6 +103,14 @@ namespace QOL_Realisim_Fixes.Patches
         // MethodReplacer can swap the call in place.
         private static void PlayOneShotDelayed(AudioSource source, AudioClip clip, float volumeScale)
         {
+            // Missile booms are the ones pitched up in ConstructorPostfix; with
+            // the setting off, any that still trigger (a missile registered
+            // before the toggle was turned off) are simply not played.
+            if (source.pitch > 1f && !MissileSonicBoomConfig.Enabled.Value)
+            {
+                return;
+            }
+
             float now = Time.timeSinceLevelLoad;
             if (_lastBoomTime.TryGetValue(source, out BoomTimeBox lastBoom) && now - lastBoom.Time < RetriggerCooldownSeconds)
             {
@@ -153,8 +151,7 @@ namespace QOL_Realisim_Fixes.Patches
             if (isMissileBoom)
             {
                 AudioClip missileClip = SonicBoomAssets.GetRandomMissile() ?? clip;
-                SoundPropagation.ScheduleDelayedOneShot(
-                    source, missileClip, position, clipDurationSeconds: MissileBoomClipDurationSeconds);
+                SoundPropagation.ScheduleDelayedOneShot(source, missileClip, position);
             }
             else if (distanceToListener >= SonicBoomAssets.FarDistanceThresholdMeters)
             {

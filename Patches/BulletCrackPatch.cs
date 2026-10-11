@@ -58,9 +58,9 @@ namespace QOL_Realisim_Fixes.Patches
         // value already in the data.
         //
         // These three anchor points are real values pulled from an in-game
-        // massPerRound dump (see LogWeaponMassDumpOnce), confirmed against
-        // which specific weapon variant actually triggered each crack during
-        // a live test, not guessed: 'Light Machine Gun' (7.62mm-class,
+        // massPerRound dump (a one-time dev tool, since removed), confirmed
+        // against which specific weapon variant actually triggered each
+        // crack during a live test, not guessed: 'Light Machine Gun' (7.62mm-class,
         // 0.04kg) -> 1.5x, '12.7mm Machine Gun' (.50 cal, 0.12kg) -> 1.0x/no
         // change, '155mm Railgun' (the largest gun that actually fired,
         // 50kg -- there's also a 10kg variant of the same name elsewhere in
@@ -86,9 +86,8 @@ namespace QOL_Realisim_Fixes.Patches
         // alpha is, so these can (and do) go well above it. Small-arms-caliber
         // cracks (SmallArmsPitch, 1.5x) get BulletCrackConfig.VolumeAtSmallArms;
         // anything with a lower (bigger-caliber) pitch scales up further from
-        // there, reaching VolumeAtLargestGun at LargestGunPitch. Live-tunable
-        // via ConfigManager rather than fixed constants, same as the distance
-        // lowpass sliders -- easier to dial in by ear than guess-and-rebuild.
+        // there, reaching VolumeAtLargestGun at LargestGunPitch (both locked-in
+        // constants in BulletCrackConfig).
 
         // The sonic boom clip this used to reuse carried plenty of low-end
         // "thud" even pitched way up -- AudioSource.pitch resamples playback
@@ -113,7 +112,7 @@ namespace QOL_Realisim_Fixes.Patches
         // needed. Intensity scales with proximity across the crack's own
         // radius (not vanilla's own sonic-boom shake formula, which is
         // scaled for a 1000m+ range and would just read as a constant 1.0
-        // everywhere inside this feature's much shorter 100m band). Raised
+        // everywhere inside this feature's much shorter 50m band). Raised
         // from 0.5 to 0.75 to open up more of the caliber range to shaking
         // -- 0.5 stopped qualifying anything at all once LargestGunPitch's
         // own floor was also raised to 0.5 (nothing could ever be strictly
@@ -132,48 +131,17 @@ namespace QOL_Realisim_Fixes.Patches
 
         private static AudioSource _templateSource;
 
+        // Runs for every bullet every physics tick (the patch is installed
+        // regardless of the setting), so it stays as cheap as possible.
         private static void Prefix(BulletSim.Bullet __instance, out GlobalPosition __state)
         {
             __state = __instance.position;
-        }
-
-        // One-time dump of every gun's real massPerRound -- used to
-        // calibrate ComputeCaliberPitch's anchor points against the game's
-        // actual data instead of guessed real-world ammunition weights,
-        // which may not match this game's own internal balance numbers at
-        // all. Same technique as the CRAM fragmentation feature's target
-        // weight list (pulled from a UnitDefinition dump rather than
-        // guessed). Runs on the very first bullet tick of the very first
-        // gun fired in a mission, regardless of range/crack conditions.
-        private static bool _weaponMassDumpLogged;
-
-        private static void LogWeaponMassDumpOnce()
-        {
-            if (_weaponMassDumpLogged)
-            {
-                return;
-            }
-            _weaponMassDumpLogged = true;
-            WeaponInfo[] allWeapons = Resources.FindObjectsOfTypeAll<WeaponInfo>();
-            SoundPropagation.Log.LogInfo(
-                $"[BulletCrackDiag] === Gun massPerRound dump ({allWeapons.Length} WeaponInfo assets total) ===");
-            foreach (WeaponInfo weapon in allWeapons)
-            {
-                if (weapon.gun)
-                {
-                    SoundPropagation.Log.LogInfo(
-                        $"[BulletCrackDiag]   '{weapon.weaponName}' massPerRound={weapon.massPerRound:F4}kg "
-                        + $"muzzleVelocity={weapon.muzzleVelocity:F0}m/s");
-                }
-            }
         }
 
         private static void Postfix(
             BulletSim.Bullet __instance, GlobalPosition __state,
             Transform muzzle, WeaponInfo info, Unit owner, bool hasCamera, GlobalPosition cameraPos)
         {
-            LogWeaponMassDumpOnce();
-
             if (muzzle != null || !hasCamera || !BulletCrackConfig.Enabled.Value)
             {
                 return;

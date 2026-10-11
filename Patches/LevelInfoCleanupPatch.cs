@@ -17,6 +17,9 @@ namespace QOL_Realisim_Fixes.Patches
             SoundPropagation.ClearAll();
             PeriodicCountermeasureControl.ClearAll();
             FuelTankFireballVariantPatch.ResetCache();
+            AircraftDoorControl.ClearAll();
+            LifeboatSpawnQueue.ClearAll();
+            FragmentSim.ClearAll();
         }
     }
 }

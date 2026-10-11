@@ -72,8 +72,8 @@ namespace QOL_Realisim_Fixes.Patches
                     // [CockpitFilterShareDiag]) recoilSound shares its
                     // GameObject with the gun's own bang/loop sources, but
                     // those never actually play on the real source at all
-                    // once this Prefix fully replaces ShotSound() (line 102
-                    // always returns false), so co-hosting a filter there is
+                    // once this Prefix fully replaces ShotSound() (it always
+                    // returns false), so co-hosting a filter there is
                     // harmless.
                     SoundPropagation.ApplyCockpitOnlyLowpass(___recoilSound, ___sources);
                     ___recoilSound.Play();

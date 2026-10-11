@@ -47,8 +47,13 @@ namespace QOL_Realisim_Fixes.Patches
                 // being filtered itself) is reused for both calls -- the
                 // guard already skips the "is this me" case, so there's no
                 // need for two different single-element lists.
-                AudioSource[] engineSources = _engineSourcesCache.GetValue(
-                    __instance, _ => new[] { ___engineIdleSound, ___engineDriveSound });
+                // TryGetValue first -- GetValue with a capturing lambda
+                // allocates a closure every call, cache hit or not.
+                if (!_engineSourcesCache.TryGetValue(__instance, out AudioSource[] engineSources))
+                {
+                    engineSources = new[] { ___engineIdleSound, ___engineDriveSound };
+                    _engineSourcesCache.Add(__instance, engineSources);
+                }
                 SoundPropagation.ApplyCockpitOnlyLowpass(___engineIdleSound, engineSources);
                 SoundPropagation.ApplyCockpitOnlyLowpass(___engineDriveSound, engineSources);
                 return;

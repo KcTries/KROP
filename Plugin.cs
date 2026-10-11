@@ -11,7 +11,7 @@ namespace QOL_Realisim_Fixes
     // internal plumbing. Only the display name here, the .csproj
     // AssemblyName, and the deployed plugin folder name changed. Same
     // convention already used for the KaceyTronic-RWR rename.
-    [BepInPlugin("pavehog727.qolrealismfixes", "KROP", "1.1.0")]
+    [BepInPlugin("pavehog727.qolrealismfixes", "KROP", "1.1.2")]
     public class Plugin : BaseUnityPlugin
     {
         private void Awake()
@@ -23,6 +23,7 @@ namespace QOL_Realisim_Fixes
             BulletCrackConfig.Initialize(Config);
             DistanceLowpassConfig.Initialize(Config);
             CockpitLowpassConfig.Initialize(Config);
+            MissileSonicBoomConfig.Initialize(Config);
             LifeboatConfig.Initialize(Config);
             NightVisionConfig.Initialize(Config); // also binds AutoGainConfig into the same section
             NightVisionAutoGain.EnsureSubscribed();
@@ -37,6 +38,7 @@ namespace QOL_Realisim_Fixes
             FlareCountConfig.Initialize(Config);
             CramFragmentationConfig.Initialize(Config);
 
+            PrepareTypesForPatching();
             Harmony harmony = new Harmony("pavehog727.qolrealismfixes");
             harmony.PatchAll();
             // SonicBoomManager.ManagedSonicBoom, JetNozzle.Afterburner, and
@@ -48,8 +50,52 @@ namespace QOL_Realisim_Fixes
             MissileMotorPatch.ApplyManualPatch(harmony);
             MissileContrailPatch.ApplyManualPatch(harmony);
             NavLightsParkedOverridePatch.ApplyManualPatch(harmony);
+            MissileAlarmFilterBypassPatch.ApplyManualPatch(harmony);
 
             PeriodicCountermeasureControl.Initialize(Config, gameObject);
+            AircraftDoorControl.Initialize(gameObject);
+        }
+
+        // Harmony copies a method's IL before patching it, asking the runtime
+        // about every type in it. GroundVehicle.Update has a
+        // GroundVehicleFields local, which holds a Nullable<SteeringInfo> --
+        // and SteeringInfo has a static field of its own nullable type
+        // (SteeringInfo? None). If the runtime reaches Nullable<SteeringInfo>
+        // BEFORE SteeringInfo itself has ever been set up, laying it out
+        // needs SteeringInfo, whose static field needs Nullable<SteeringInfo>
+        // mid-layout -- and Mono crashes outright (native crash during
+        // PatchAll, no BepInEx log). The game itself always reaches
+        // SteeringInfo first; so does any plugin that touches it before
+        // this one (NOAutopilot's AI taxi patches do), which is why the
+        // crash only showed up on some installs. So: SteeringInfo alone
+        // first, in its own method, then the rest -- all before patching.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void PrepareTypesForPatching()
+        {
+            PrepareSteeringInfo();
+            PrepareGroundVehicleFields();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void PrepareSteeringInfo()
+        {
+            SteeringInfo info = default;
+            if (info.nextWaypointAngle > 0f)
+            {
+                info = default;
+            }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void PrepareGroundVehicleFields()
+        {
+            NuclearOption.Jobs.GroundVehicleFields fields = default;
+            SteeringInfo? steering = fields.steeringInfoNullable;
+            NuclearOption.Jobs.PtrAllocation<NuclearOption.Jobs.GroundVehicleFields> allocation = default;
+            if (steering.HasValue && allocation.IsCreated)
+            {
+                fields.speed = 0f;
+            }
         }
     }
 }

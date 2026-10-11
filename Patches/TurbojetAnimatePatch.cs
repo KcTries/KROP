@@ -46,7 +46,7 @@ namespace QOL_Realisim_Fixes.Patches
 
             if (___aircraft.displayDetail < 1f)
             {
-                if (!_loggedDisplayDetailSkip.TryGetValue(__instance, out _))
+                if (VerboseLoggingConfig.Enabled.Value && !_loggedDisplayDetailSkip.TryGetValue(__instance, out _))
                 {
                     _loggedDisplayDetailSkip.Add(__instance, null);
                     SoundPropagation.Log.LogInfo(

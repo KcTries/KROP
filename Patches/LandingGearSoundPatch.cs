@@ -125,9 +125,16 @@ namespace QOL_Realisim_Fixes.Patches
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LandingGear, AudioSource[]> Cache =
             new System.Runtime.CompilerServices.ConditionalWeakTable<LandingGear, AudioSource[]>();
 
+        // TryGetValue first -- GetValue with a capturing lambda allocates a
+        // closure on every call, even when the entry already exists.
         internal static AudioSource[] Get(LandingGear gear, AudioSource tireNoiseSound, AudioSource tireSkidSound, AudioSource foldSoundSource)
         {
-            return Cache.GetValue(gear, _ => new[] { tireNoiseSound, tireSkidSound, foldSoundSource });
+            if (!Cache.TryGetValue(gear, out AudioSource[] siblings))
+            {
+                siblings = new[] { tireNoiseSound, tireSkidSound, foldSoundSource };
+                Cache.Add(gear, siblings);
+            }
+            return siblings;
         }
     }
 }

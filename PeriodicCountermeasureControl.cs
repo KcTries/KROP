@@ -27,36 +27,11 @@ namespace QOL_Realisim_Fixes
     //
     // Toggle used to be a double-tap on the vanilla Countermeasures button,
     // but that made it trivial to trigger by accident while rapidly
-    // mashing Countermeasures to dump flares in a hurry. Native
-    // Controls-menu integration has been through three attempts:
-    // - A whole new "KQOLRF" category/tab surfaced a real bug in BOTE's own
-    //   (all currently released versions of it) input registration code --
-    //   it re-registers its category without a re-entry guard, corrupting
-    //   the Controls menu's layout once a second mod's category also
-    //   existed.
-    // - Adding a "Toggle PCR"/"PCR Modifier" action into the EXISTING
-    //   "Flight" category instead avoided that specific bug, but the
-    //   action was hand-rolled with a deliberately huge, self-assigned id
-    //   (300000-350000 range) spliced directly into userData.actions/
-    //   actionCategoryMap -- this broke keybind reassignment game-wide,
-    //   not just for our own two actions. Briefly replaced with a
-    //   BepInEx ConfigManager KeyboardShortcut instead (zero Rewired
-    //   involvement, but keyboard-only, no controller combo).
-    // - Currently back on native Controls-menu actions (see
-    //   PcrToggleActionPatch), this time created entirely through
-    //   UserData's own public AddAction API instead of a self-assigned id
-    //   -- the vanilla game's own actions only ever use ids 0-64
-    //   (confirmed against the actual shipped Rewired data), so the
-    //   previous attempt's wildly-out-of-range id is the leading suspect
-    //   for what broke everything else. This is still an experiment on an
-    //   internal build, not a confirmed fix -- Rewired's own
-    //   initialization is commercially obfuscated and not fully
-    //   traceable. A rebind attempt duplicated the player's controller in
-    //   Rewired's own controller list -- currently investigating that
-    //   specific symptom rather than reverting outright. If this can't be
-    //   resolved, revert to the ConfigManager KeyboardShortcut approach
-    //   (see this file's own git history) and delete
-    //   PcrToggleActionPatch.cs again.
+    // mashing Countermeasures to dump flares in a hurry. It's now two
+    // native Controls-menu actions in the existing "Flight" category (see
+    // PcrToggleActionPatch for how they're registered safely -- a separate
+    // category of our own corrupted the Controls menu alongside BOTE's,
+    // which re-registers its category without a re-entry guard):
     //
     //  - Toggle key ("Toggle PCR"): a direct single-key toggle.
     //  - Modifier key ("PCR Modifier"): held alongside the vanilla
@@ -199,9 +174,12 @@ namespace QOL_Realisim_Fixes
 
             if (nativeActionPressed || (modifierHeld && countermeasureRisingEdge))
             {
-                SoundPropagation.Log.LogInfo(
-                    $"[PcrDiag] Toggle triggered at t={Time.timeSinceLevelLoad:F2} (nativeAction={nativeActionPressed}, "
-                    + $"modifierCombo={modifierHeld && countermeasureRisingEdge})");
+                if (VerboseLoggingConfig.Enabled.Value)
+                {
+                    SoundPropagation.Log.LogInfo(
+                        $"[PcrDiag] Toggle triggered at t={Time.timeSinceLevelLoad:F2} (nativeAction={nativeActionPressed}, "
+                        + $"modifierCombo={modifierHeld && countermeasureRisingEdge})");
+                }
                 TogglePcr(localAircraft);
             }
 
@@ -263,9 +241,13 @@ namespace QOL_Realisim_Fixes
 
         private static void TogglePcr(Aircraft aircraft)
         {
+            bool verbose = VerboseLoggingConfig.Enabled.Value;
             if (_pcrAircraft == aircraft)
             {
-                SoundPropagation.Log.LogInfo($"[PcrDiag] PCR turned OFF for '{aircraft.name}' at t={Time.timeSinceLevelLoad:F2}");
+                if (verbose)
+                {
+                    SoundPropagation.Log.LogInfo($"[PcrDiag] PCR turned OFF for '{aircraft.name}' at t={Time.timeSinceLevelLoad:F2}");
+                }
                 _pcrAircraft = null;
                 _pcrTarget = null;
             }
@@ -274,14 +256,20 @@ namespace QOL_Realisim_Fixes
                 Countermeasure target = aircraft.countermeasureManager.GetActiveCountermeasure();
                 if (target is RadarJammer)
                 {
-                    SoundPropagation.Log.LogInfo(
-                        $"[PcrDiag] PCR toggle-on rejected for '{aircraft.name}' -- Radar Jammer is selected.");
+                    if (verbose)
+                    {
+                        SoundPropagation.Log.LogInfo(
+                            $"[PcrDiag] PCR toggle-on rejected for '{aircraft.name}' -- Radar Jammer is selected.");
+                    }
                     return;
                 }
 
-                SoundPropagation.Log.LogInfo(
-                    $"[PcrDiag] PCR turned ON for '{aircraft.name}' at t={Time.timeSinceLevelLoad:F2}, "
-                    + $"locked to '{(target != null ? target.displayName : "none")}'");
+                if (verbose)
+                {
+                    SoundPropagation.Log.LogInfo(
+                        $"[PcrDiag] PCR turned ON for '{aircraft.name}' at t={Time.timeSinceLevelLoad:F2}, "
+                        + $"locked to '{(target != null ? target.displayName : "none")}'");
+                }
                 _pcrAircraft = aircraft;
                 _pcrTarget = target;
                 _nextFireTime = Time.timeSinceLevelLoad;

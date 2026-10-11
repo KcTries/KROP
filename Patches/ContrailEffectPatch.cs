@@ -381,7 +381,6 @@ namespace QOL_Realisim_Fixes.Patches
             state.LastEmitTime = Time.time;
 
             ApplyWind(state, position);
-            ApplyTuning(state.System);
 
             // The container GameObject's own transform never moved
             // otherwise (Custom sim space decouples individual particle
@@ -519,9 +518,11 @@ namespace QOL_Realisim_Fixes.Patches
             state.System.SetParticles(_particleBuffer, count);
         }
 
-        // Re-applied every tick a contrail is actively fed (not just at
-        // creation) -- cheap enough to not bother caching.
-        internal static void ApplyTuning(ParticleSystem system)
+        // Applied once, when the contrail is created. It used to be re-applied
+        // every physics tick so the old Thickness sliders took effect live,
+        // which rebuilt an AnimationCurve and a Gradient (plus their arrays)
+        // per engine per tick; the values are fixed constants now.
+        private static void ApplyTuning(ParticleSystem system)
         {
             float startThickness = ContrailConfig.StartThickness;
             float endThickness = ContrailConfig.EndThickness;
@@ -583,10 +584,8 @@ namespace QOL_Realisim_Fixes.Patches
             main.loop = true;
             main.duration = 30f;
             main.startLifetime = LifetimeSeconds;
-            // Real start size/size-over-lifetime/color-over-lifetime curves
-            // are set by ApplyTuning() every active tick -- these are just
-            // placeholder defaults until the first ApplyTuning() call.
-            main.startSize = new ParticleSystem.MinMaxCurve(ContrailConfig.StartThickness);
+            // Start size/size-over-lifetime/color-over-lifetime are all set
+            // by ApplyTuning() below.
             // Plain white -- now that the material is a Lit (not Unlit)
             // shader, real scene lighting does the work of making it read
             // as properly bright in daylight; no artificial overbright
@@ -594,8 +593,8 @@ namespace QOL_Realisim_Fixes.Patches
             // at night, since Unlit ignored lighting entirely).
             main.startColor = Color.white;
             // Velocity comes entirely from emitParams.velocity per Emit
-            // call (the aircraft's own velocity at that instant), not a
-            // shape-driven launch speed.
+            // call (the local wind at that instant, see DriveContrail), not
+            // a shape-driven launch speed.
             main.startSpeed = 0f;
             main.simulationSpace = ParticleSystemSimulationSpace.Custom;
             main.customSimulationSpace = Datum.origin;
@@ -634,9 +633,7 @@ namespace QOL_Realisim_Fixes.Patches
             // (GetParticles/SetParticles) rather than these built-in
             // modules. See ApplyWind's own comment for why.
 
-            // Real size-over-lifetime/color-over-lifetime curves are set by
-            // ApplyTuning() every active tick (Start/End Thickness config-
-            // driven, live-tunable) -- not set here.
+            ApplyTuning(system);
 
             // Ribbon trails -- this is the actual missile-smoke/wingtip-
             // vortex technique: connects consecutive alive particles from

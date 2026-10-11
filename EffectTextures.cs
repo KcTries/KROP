@@ -228,26 +228,12 @@ namespace QOL_Realisim_Fixes
             }
             material.EnableKeyword("_RECEIVE_SHADOWS_OFF");
 
-            // Reverted -- Soft Particles fades a particle out when it's
-            // close to intersecting ANY opaque geometry (via the camera's
-            // depth texture), and our particles spawn right at the engine
-            // nozzle, essentially touching the emitting aircraft's own
-            // fuselage. That's exactly the "too close to geometry" zone
-            // Soft Particles fades toward invisible -- reported as
-            // "broke the contrails" right after this was added. Camera
-            // Fading (fades particles too close to the lens) is the same
-            // category of risk and reverted alongside it, untested in
-            // isolation.
+            // Soft Particles and Camera Fading (the other two keywords that
+            // material uses) are deliberately left off: soft particles fade
+            // out anything close to opaque geometry, and contrail particles
+            // spawn right against the aircraft's own fuselage -- enabling it
+            // made the contrails vanish.
             //
-            // material.SetFloat("_CameraFadingEnabled", 1f);
-            // material.SetFloat("_CameraNearFadeDistance", 10f);
-            // material.SetFloat("_CameraFarFadeDistance", 30f);
-            // material.EnableKeyword("_FADING_ON");
-            //
-            // material.SetFloat("_SoftParticlesEnabled", 1f);
-            // material.SetFloat("_SoftParticlesNearFadeDistance", 0f);
-            // material.SetFloat("_SoftParticlesFarFadeDistance", 5f);
-            // material.EnableKeyword("_SOFTPARTICLES_ON");
             // 2999, not the default Transparent baseline (3000) -- copied
             // directly from the real smokeRibbonScatter.mat's own
             // m_CustomRenderQueue. Two alpha-blended transparent objects

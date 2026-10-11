@@ -11,9 +11,13 @@ namespace QOL_Realisim_Fixes
     {
         private const int BeaconMaterialIndex = 5;
 
+        // Position is Datum.origin-relative: a spawn waits up to 8s, and a
+        // floating-origin shift in that window (every ~1km of camera
+        // travel) would otherwise drop the boat 1000+ m from where it was
+        // meant to be.
         private struct PendingSpawn
         {
-            public Vector3 Position;
+            public Vector3 OriginRelativePosition;
             public Quaternion Rotation;
             public float SpawnTime;
         }
@@ -35,10 +39,17 @@ namespace QOL_Realisim_Fixes
         {
             _pending.Add(new PendingSpawn
             {
-                Position = position,
+                OriginRelativePosition = Datum.origin.InverseTransformPoint(position),
                 Rotation = rotation,
                 SpawnTime = Time.time + delaySeconds,
             });
+        }
+
+        // Called on mission teardown (see LevelInfoCleanupPatch) so a boat
+        // still waiting to spawn can't appear in the next mission.
+        internal static void ClearAll()
+        {
+            _pending.Clear();
         }
 
         internal static void Tick()
@@ -51,8 +62,11 @@ namespace QOL_Realisim_Fixes
                     continue;
                 }
 
-                SpawnNow(spawn.Position, spawn.Rotation);
                 _pending.RemoveAt(i);
+                if (Datum.origin != null)
+                {
+                    SpawnNow(Datum.origin.TransformPoint(spawn.OriginRelativePosition), spawn.Rotation);
+                }
             }
         }
 

@@ -36,8 +36,11 @@ namespace QOL_Realisim_Fixes.Patches
             Aircraft aircraft = __instance.GetComponentInParent<Aircraft>();
             if (aircraft == null || aircraft.definition == null)
             {
-                SoundPropagation.Log.LogWarning(
-                    $"[FlareCountDiag] FlareEjector on '{__instance.name}' has no resolvable Aircraft/definition at Awake -- skipping flare count override.");
+                if (VerboseLoggingConfig.Enabled.Value)
+                {
+                    SoundPropagation.Log.LogWarning(
+                        $"[FlareCountDiag] FlareEjector on '{__instance.name}' has no resolvable Aircraft/definition at Awake -- skipping flare count override.");
+                }
                 return;
             }
 
@@ -54,9 +57,12 @@ namespace QOL_Realisim_Fixes.Patches
             int original = ___maxAmmo;
             ___maxAmmo = overrideCount;
             __instance.ammo = overrideCount;
-            SoundPropagation.Log.LogInfo(
-                $"[FlareCountDiag] '{aircraft.definition.jsonKey}' flare count raised {original} -> {overrideCount} "
-                + "(matches counted ejector ports)");
+            if (VerboseLoggingConfig.Enabled.Value)
+            {
+                SoundPropagation.Log.LogInfo(
+                    $"[FlareCountDiag] '{aircraft.definition.jsonKey}' flare count raised {original} -> {overrideCount} "
+                    + "(matches counted ejector ports)");
+            }
         }
     }
 }

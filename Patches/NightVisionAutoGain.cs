@@ -97,7 +97,7 @@ namespace QOL_Realisim_Fixes.Patches
             // BuiltinRenderTextureType.CameraTarget symbolically refers to
             // wherever THIS camera just rendered (its own target texture,
             // or the backbuffer) -- Blitting from it downsamples straight
-            // to an 8x8 copy without needing a registered
+            // to a DownsampleSize-square copy without needing a registered
             // ScriptableRendererFeature.
             CommandBuffer cmd = CommandBufferPool.Get("QOL_NvgAutoGainSample");
             cmd.Blit(BuiltinRenderTextureType.CameraTarget, _downsampleTexture);

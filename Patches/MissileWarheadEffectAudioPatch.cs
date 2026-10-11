@@ -141,24 +141,35 @@ namespace QOL_Realisim_Fixes.Patches
             // Already self-registers with ExplosionAudioManager via its own
             // Start() -- already covered by ExplosionAudioCockpitFilterPatch,
             // so don't double-handle it here.
+            bool verbose = VerboseLoggingConfig.Enabled.Value;
             if (instance.GetComponentInChildren<ExplosionAudio>() != null)
             {
-                SoundPropagation.Log.LogInfo(
-                    $"[MissileWarheadAudioDiag] '{prefabName}' has its own ExplosionAudio component -- "
-                    + "deferring to ExplosionAudioManager, not taking over here.");
+                if (verbose)
+                {
+                    SoundPropagation.Log.LogInfo(
+                        $"[MissileWarheadAudioDiag] '{prefabName}' has its own ExplosionAudio component -- "
+                        + "deferring to ExplosionAudioManager, not taking over here.");
+                }
                 return;
             }
 
             AudioSource[] sources = instance.GetComponentsInChildren<AudioSource>();
-            SoundPropagation.Log.LogInfo(
-                $"[MissileWarheadAudioDiag] '{prefabName}' spawned, no ExplosionAudio -- found {sources.Length} "
-                + $"AudioSource(s) one frame later: {string.Join(", ", System.Array.ConvertAll(sources, s =>
-                    $"'{s.gameObject.name}' clip={(s.clip != null ? s.clip.name : "null")} "
-                    + $"isPlaying={s.isPlaying} playOnAwake={s.playOnAwake} volume={s.volume:F2}"))}");
+            if (verbose)
+            {
+                SoundPropagation.Log.LogInfo(
+                    $"[MissileWarheadAudioDiag] '{prefabName}' spawned, no ExplosionAudio -- found {sources.Length} "
+                    + $"AudioSource(s) one frame later: {string.Join(", ", System.Array.ConvertAll(sources, s =>
+                        $"'{s.gameObject.name}' clip={(s.clip != null ? s.clip.name : "null")} "
+                        + $"isPlaying={s.isPlaying} playOnAwake={s.playOnAwake} volume={s.volume:F2}"))}");
+            }
 
             foreach (AudioSource source in sources)
             {
-                if (source.clip == null)
+                // Only what vanilla actually started playing -- a source
+                // with a clip that isn't playing (no Play On Awake, or
+                // meant to be triggered later by something else) was never
+                // going to be heard here.
+                if (source.clip == null || !(source.isPlaying || (source.playOnAwake && source.isActiveAndEnabled)))
                 {
                     continue;
                 }

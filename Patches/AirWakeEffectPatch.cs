@@ -131,7 +131,11 @@ namespace QOL_Realisim_Fixes.Patches
 
         private static void Postfix(Aircraft __instance)
         {
-            if (!AirWakeConfig.Enabled.Value || GameManager.IsHeadless || __instance == null || __instance.rb == null)
+            // A disabled aircraft (crashed, ejected) keeps running FixedUpdate
+            // as a wreck until it despawns -- its effect objects were already
+            // destroyed by DestroyEffect at disable time.
+            if (!AirWakeConfig.Enabled.Value || GameManager.IsHeadless || __instance == null || __instance.rb == null
+                || __instance.disabled)
             {
                 return;
             }
@@ -140,6 +144,14 @@ namespace QOL_Realisim_Fixes.Patches
             if (state.IsHelicopter)
             {
                 return;
+            }
+
+            // Destroyed out from under us by something other than
+            // DestroyEffect (they're parented to Datum.origin) -- start over
+            // rather than touching dead objects every tick.
+            if (state.Systems != null && (state.EffectObjects[0] == null || state.EffectObjects[1] == null))
+            {
+                ClearEffect(state);
             }
 
             // Runs whether or not this aircraft is currently emitting --
@@ -425,8 +437,9 @@ namespace QOL_Realisim_Fixes.Patches
             }
         }
 
-        // Only ever called once per aircraft (EffectAttempted latches
-        // regardless of success), the first time it actually qualifies.
+        // Called the first time an aircraft actually qualifies
+        // (EffectAttempted latches regardless of success), and again only if
+        // its effect objects were destroyed from outside (see ClearEffect).
         private static void CreateEffect(Aircraft aircraft, AirWakeState state)
         {
             state.EffectAttempted = true;
@@ -561,6 +574,19 @@ namespace QOL_Realisim_Fixes.Patches
                     Object.Destroy(state.EffectObjects[i]);
                 }
             }
+            ClearEffect(state);
+        }
+
+        // Forgets the (destroyed or about-to-be-destroyed) effect objects so
+        // nothing keeps using them; CreateEffect may build fresh ones.
+        private static void ClearEffect(AirWakeState state)
+        {
+            state.EffectObjects = null;
+            state.Systems = null;
+            state.Renderers = null;
+            state.EffectAttempted = false;
+            state.Emitting = false;
+            state.EmitCounter = 0f;
         }
     }
 }

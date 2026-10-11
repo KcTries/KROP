@@ -8,18 +8,18 @@ namespace QOL_Realisim_Fixes
     // built on BulletSim.Bullet -- that class only stores GlobalPosition
     // (floating-origin aware) and has no back-reference from a Bullet to the
     // BulletSim/List<Bullet> that owns it, so a proximity-fuse Prefix has no
-    // way to append new bullets to the right list. Fragments are short-lived
-    // (a couple seconds) and short-range, so plain local-space Vector3
-    // tracking is an acceptable simplification -- worst case, a fragment
-    // that happens to still be alive during a rare floating-origin shift
-    // lands slightly off. One shared list + one FixedUpdate driver keeps the
+    // way to append new bullets to the right list. Positions are stored
+    // Datum.origin-relative and converted to world space each tick -- a
+    // floating-origin shift moves the whole scene 1000+ m, so a raw world
+    // position held across one would put the fragment far from where it
+    // really is. One shared list + one FixedUpdate driver keeps the
     // per-burst cost to a handful of struct entries and a few linecasts,
     // instead of instantiating real GameObjects per fragment.
     internal static class FragmentSim
     {
         private struct Fragment
         {
-            public Vector3 Position;
+            public Vector3 OriginRelativePosition;
             public Vector3 Velocity;
             public float RemainingLifetime;
             public float PierceDamage;
@@ -65,6 +65,7 @@ namespace QOL_Realisim_Fixes
             int count = CramFragmentationConfig.FragmentCount.Value;
 
             bool showTracers = CramFragmentationConfig.ShowDebugTracers.Value && !GameManager.IsHeadless;
+            Vector3 originRelativePosition = Datum.origin.InverseTransformPoint(position);
 
             for (int i = 0; i < count; i++)
             {
@@ -83,7 +84,7 @@ namespace QOL_Realisim_Fixes
 
                 _fragments.Add(new Fragment
                 {
-                    Position = position,
+                    OriginRelativePosition = originRelativePosition,
                     Velocity = fragmentVelocity,
                     RemainingLifetime = lifetime,
                     PierceDamage = pierceDamage,
@@ -110,8 +111,24 @@ namespace QOL_Realisim_Fixes
             return spin * tilt * forward;
         }
 
+        // Called on mission teardown (see LevelInfoCleanupPatch) so no
+        // fragment from the mission that just ended carries over.
+        internal static void ClearAll()
+        {
+            foreach (Fragment fragment in _fragments)
+            {
+                ReleaseTracer(fragment.Tracer);
+            }
+            _fragments.Clear();
+        }
+
         internal static void Tick(float deltaTime)
         {
+            if (_fragments.Count == 0 || Datum.origin == null)
+            {
+                return;
+            }
+
             for (int i = _fragments.Count - 1; i >= 0; i--)
             {
                 Fragment fragment = _fragments[i];
@@ -123,10 +140,11 @@ namespace QOL_Realisim_Fixes
                     continue;
                 }
 
+                Vector3 position = Datum.origin.TransformPoint(fragment.OriginRelativePosition);
                 Vector3 nextVelocity = fragment.Velocity + Vector3.down * (9.81f * deltaTime);
-                Vector3 nextPosition = fragment.Position + nextVelocity * deltaTime;
+                Vector3 nextPosition = position + nextVelocity * deltaTime;
 
-                if (Physics.Linecast(fragment.Position, nextPosition, out RaycastHit hit, ~(int)PhysicsLayers.ExclusionZonesMask))
+                if (Physics.Linecast(position, nextPosition, out RaycastHit hit, ~(int)PhysicsLayers.ExclusionZonesMask))
                 {
                     IDamageable damageable = hit.collider.gameObject.GetComponent<IDamageable>();
                     if (damageable != null)
@@ -149,7 +167,7 @@ namespace QOL_Realisim_Fixes
                         DebugTracerThickness, DebugTracerThickness, nextVelocity.magnitude * deltaTime);
                 }
 
-                fragment.Position = nextPosition;
+                fragment.OriginRelativePosition = Datum.origin.InverseTransformPoint(nextPosition);
                 fragment.Velocity = nextVelocity;
                 _fragments[i] = fragment;
             }

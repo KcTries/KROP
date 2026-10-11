@@ -24,7 +24,7 @@ namespace QOL_Realisim_Fixes
         internal static void Initialize(ConfigFile config)
         {
             Enabled = config.Bind(
-                "General",
+                "Audio",
                 "Atmospheric Audio Filtering",
                 true,
                 "Applies a filter to audio based on distance from the camera.");

@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>KROP-1.1</AssemblyName>
+    <AssemblyName>KROP-1.1.2</AssemblyName>
     <Nullable>disable</Nullable>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <RestoreAdditionalProjectSources>

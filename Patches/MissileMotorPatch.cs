@@ -43,9 +43,12 @@ namespace QOL_Realisim_Fixes.Patches
             // registers anything but aircraft (from JetNozzle.Awake).
             // Registering here gives missiles the same boom-on-supersonic
             // behavior for free; SonicBoomManagePatch tags it as a missile
-            // boom (pitched up, tighter double-crack) at construction time.
+            // boom (pitched up, own clip pool) at construction time.
             // RegisterUnit no-ops if this missile is already registered.
-            SonicBoomManager.RegisterUnit(missile);
+            if (MissileSonicBoomConfig.Enabled.Value)
+            {
+                SonicBoomManager.RegisterUnit(missile);
+            }
 
             if (___audioSources == null)
             {
@@ -94,8 +97,16 @@ namespace QOL_Realisim_Fixes.Patches
             }
         }
 
-        private static void ThrustPostfix(Missile missile, AudioSource[] ___audioSources)
+        private static void ThrustPostfix(Missile missile, AudioSource[] ___audioSources, AudioSource ___startupSource)
         {
+            // The pre-ignition startup sound (played from Thrust() during
+            // the launch delay) isn't part of the tracked motor loop --
+            // cockpit muffling only, on the real source.
+            if (___startupSource != null && ___startupSource.isPlaying)
+            {
+                SoundPropagation.ApplyCockpitOnlyLowpass(___startupSource);
+            }
+
             if (___audioSources == null)
             {
                 return;

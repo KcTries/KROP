@@ -83,7 +83,7 @@ namespace QOL_Realisim_Fixes.Patches
                 // startup RPM transient, potentially) plays back through a
                 // freshly created clone with no prior context to smooth
                 // against.
-                if (!_loggedDisplayDetailSkip.TryGetValue(__instance, out _))
+                if (VerboseLoggingConfig.Enabled.Value && !_loggedDisplayDetailSkip.TryGetValue(__instance, out _))
                 {
                     _loggedDisplayDetailSkip.Add(__instance, null);
                     SoundPropagation.Log.LogInfo(

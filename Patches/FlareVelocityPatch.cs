@@ -24,11 +24,14 @@ namespace QOL_Realisim_Fixes.Patches
         {
             float original = ___ejectionVelocity;
             ___ejectionVelocity = Mathf.Max(___ejectionVelocity, FlareVelocityControl.MinimumVelocity.Value);
-            SoundPropagation.Log.LogInfo(
-                $"[FlareDiag] FlareEjector on '{__instance.name}' -- "
-                + $"ejectionVelocity original={original:F2} adjusted={___ejectionVelocity:F2} "
-                + $"(floor={FlareVelocityControl.MinimumVelocity.Value:F2}) variance={___ejectionVelocityVariance:F2} "
-                + $"interval={___ejectionInterval:F3} grouping={___ejectionGrouping}");
+            if (VerboseLoggingConfig.Enabled.Value)
+            {
+                SoundPropagation.Log.LogInfo(
+                    $"[FlareDiag] FlareEjector on '{__instance.name}' -- "
+                    + $"ejectionVelocity original={original:F2} adjusted={___ejectionVelocity:F2} "
+                    + $"(floor={FlareVelocityControl.MinimumVelocity.Value:F2}) variance={___ejectionVelocityVariance:F2} "
+                    + $"interval={___ejectionInterval:F3} grouping={___ejectionGrouping}");
+            }
         }
     }
 
@@ -44,11 +47,14 @@ namespace QOL_Realisim_Fixes.Patches
         {
             float original = ___ejectionVelocity;
             ___ejectionVelocity = Mathf.Max(___ejectionVelocity, FlareVelocityControl.MinimumVelocity.Value);
-            SoundPropagation.Log.LogInfo(
-                $"[FlareDiag] ChaffEjector on '{__instance.name}' -- "
-                + $"ejectionVelocity original={original:F2} adjusted={___ejectionVelocity:F2} "
-                + $"(floor={FlareVelocityControl.MinimumVelocity.Value:F2}) variance={___ejectionVelocityVariance:F2} "
-                + $"interval={___ejectionInterval:F3} grouping={___ejectionGrouping}");
+            if (VerboseLoggingConfig.Enabled.Value)
+            {
+                SoundPropagation.Log.LogInfo(
+                    $"[FlareDiag] ChaffEjector on '{__instance.name}' -- "
+                    + $"ejectionVelocity original={original:F2} adjusted={___ejectionVelocity:F2} "
+                    + $"(floor={FlareVelocityControl.MinimumVelocity.Value:F2}) variance={___ejectionVelocityVariance:F2} "
+                    + $"interval={___ejectionInterval:F3} grouping={___ejectionGrouping}");
+            }
         }
     }
 }

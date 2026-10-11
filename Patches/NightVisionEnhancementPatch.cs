@@ -196,9 +196,13 @@ namespace QOL_Realisim_Fixes.Patches
             }
             else if (Time.unscaledTime >= _nextRotationTime)
             {
-                RotateGrainRandomly(_grainPixels, StaticTextureSize);
-                _staticTexture.SetPixels32(_grainPixels);
-                _staticTexture.Apply(false, false);
+                // A 0-degree roll changes nothing, so it skips the 1MB
+                // re-upload too.
+                if (RotateGrainRandomly(StaticTextureSize))
+                {
+                    _staticTexture.SetPixels32(_grainPixels);
+                    _staticTexture.Apply(false, false);
+                }
                 _nextRotationTime = Time.unscaledTime + RotationIntervalSeconds;
             }
 
@@ -244,34 +248,50 @@ namespace QOL_Realisim_Fixes.Patches
             }
         }
 
+        // Second buffer the rotation writes into, then swapped with
+        // _grainPixels -- allocating a fresh 1MB array per quarter turn
+        // (every 3 seconds while NVG was on) was steady GC churn.
+        private static Color32[] _grainScratch;
+
         // Picks one of 0/90/180/270 degrees at random and rotates the
-        // CURRENT tile that far -- not a fresh re-roll, so it stays cheap
-        // (no per-pixel RNG) and never converges toward a "smoother"
-        // average the way re-randomizing every frame would risk looking.
-        private static void RotateGrainRandomly(Color32[] pixels, int size)
+        // CURRENT tile that far in a single pass -- not a fresh re-roll, so
+        // it stays cheap (no per-pixel RNG) and never converges toward a
+        // "smoother" average the way re-randomizing every frame would risk
+        // looking. Returns false when it rolled 0 (nothing changed).
+        private static bool RotateGrainRandomly(int size)
         {
             int quarterTurns = RandomSource.Next(0, 4);
-            for (int i = 0; i < quarterTurns; i++)
+            if (quarterTurns == 0)
             {
-                RotateGrain90(pixels, size);
+                return false;
             }
-        }
 
-        private static void RotateGrain90(Color32[] pixels, int size)
-        {
-            Color32[] rotated = new Color32[pixels.Length];
+            if (_grainScratch == null || _grainScratch.Length != _grainPixels.Length)
+            {
+                _grainScratch = new Color32[_grainPixels.Length];
+            }
+
+            int last = size - 1;
             for (int y = 0; y < size; y++)
             {
                 for (int x = 0; x < size; x++)
                 {
-                    // Clockwise 90: (x, y) -> (size-1-y, x).
-                    rotated[x * size + (size - 1 - y)] = pixels[y * size + x];
+                    // Clockwise rotation by quarterTurns * 90 degrees.
+                    int index;
+                    switch (quarterTurns)
+                    {
+                        case 1: index = x * size + (last - y); break;          // (x, y) -> (last-y, x)
+                        case 2: index = (last - y) * size + (last - x); break; // (x, y) -> (last-x, last-y)
+                        default: index = (last - x) * size + y; break;         // (x, y) -> (y, last-x)
+                    }
+                    _grainScratch[index] = _grainPixels[y * size + x];
                 }
             }
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                pixels[i] = rotated[i];
-            }
+
+            Color32[] swap = _grainPixels;
+            _grainPixels = _grainScratch;
+            _grainScratch = swap;
+            return true;
         }
     }
 }

@@ -19,12 +19,17 @@ namespace QOL_Realisim_Fixes.Patches
     //    Modifier + Countermeasures) -- a press in that state should never
     //    ALSO fire a real countermeasure release, whether or not it
     //    actually lines up with the toggle's own rising-edge check.
+    //
+    // Every aircraft's flares go through this method, AI included, so the
+    // modifier check is limited to the local player's own aircraft --
+    // otherwise holding the modifier stopped every aircraft in the match
+    // from dispensing.
     [HarmonyPatch(typeof(CountermeasureManager), nameof(CountermeasureManager.DeployCountermeasure))]
     internal static class DeployCountermeasureLockoutPatch
     {
         private static bool Prefix(Aircraft aircraft)
         {
-            if (PeriodicCountermeasureControl.IsModifierHeld())
+            if (aircraft != null && GameManager.IsLocalAircraft(aircraft) && PeriodicCountermeasureControl.IsModifierHeld())
             {
                 return false;
             }

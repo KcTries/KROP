@@ -21,6 +21,10 @@ namespace QOL_Realisim_Fixes
         private MaterialPropertyBlock _block;
         private float _phaseOffset;
         private float _activateTime;
+        // The property block is only rewritten when the light actually
+        // switches, not every frame.
+        private bool _initialized;
+        private bool _lastIsOn;
 
         internal void Initialize(Renderer targetRenderer, int materialIndex)
         {
@@ -39,6 +43,12 @@ namespace QOL_Realisim_Fixes
         private void Update()
         {
             bool isOn = Time.time >= _activateTime && (Time.time + _phaseOffset) % Period < OnDuration;
+            if (_initialized && isOn == _lastIsOn)
+            {
+                return;
+            }
+            _initialized = true;
+            _lastIsOn = isOn;
             _renderer.GetPropertyBlock(_block, _materialIndex);
             _block.SetColor(EmissionColorId, isOn ? OnColor : Color.black);
             _renderer.SetPropertyBlock(_block, _materialIndex);

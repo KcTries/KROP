@@ -23,7 +23,7 @@ namespace QOL_Realisim_Fixes
         internal static void Initialize(ConfigFile config)
         {
             Enabled = config.Bind(
-                "General",
+                "Audio",
                 "1st Person Audio Filter",
                 true,
                 "Muffles sounds when in first person.");

@@ -18,7 +18,7 @@ namespace QOL_Realisim_Fixes
         internal static void Initialize(ConfigFile config)
         {
             DelayEnabled = config.Bind(
-                "General",
+                "Audio",
                 "Engine Sound Propagation",
                 false,
                 "Toggle the simulation for engine audio processing (PERFORMANCE HEAVY!!!!)");
